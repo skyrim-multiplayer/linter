@@ -1009,7 +1009,7 @@ async function downloadFile(url, destPath, expectedSha256) {
   console.log(`Downloading ${path.basename(destPath)} from ${url}...`);
   await new Promise((resolve, reject) => {
     exec(
-      `curl -fSL --retry 3 --retry-delay 5 -o '${destPath}' '${url}'`,
+      `curl -fSL --retry 3 --retry-delay 5 -o "${destPath}" "${url}"`,
       { maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
@@ -1043,8 +1043,8 @@ function extractArchive(archivePath, destDir, members = []) {
       command = `powershell -command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force"`;
     } else {
       ensureDirExists(destDir);
-      const memberArgs = members.map((m) => `'${m}'`).join(" ");
-      command = `tar -xf '${archivePath}' -C '${destDir}' ${memberArgs}`;
+      const memberArgs = members.map((m) => `"${m}"`).join(" ");
+      command = `tar -xf "${archivePath}" -C "${destDir}" ${memberArgs}`;
     }
     exec(command, { maxBuffer: 10 * 1024 * 1024 }, (error) => {
       if (error) {
