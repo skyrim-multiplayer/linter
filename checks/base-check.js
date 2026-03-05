@@ -93,6 +93,18 @@ export class BaseCheck {
   }
 
   /**
+   * Resolve and download tools this check depends on.
+   * Called once before running lint/fix. The returned object is merged
+   * into the shared deps bag.
+   * Subclasses should override to download/locate their tools.
+   * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean, toolsDir: string }} options
+   * @returns {Promise<object>} Key-value pairs to merge into deps.
+   */
+  async resolveDeps(_options) {
+    return {};
+  }
+
+  /**
    * Lint (read-only check) a single file.
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.

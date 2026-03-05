@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import { BaseCheck } from "./base-check.js";
+import { getClangFormatPath } from "../tool-resolve/clang-format.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,6 +13,11 @@ export class ClangFormatCheck extends BaseCheck {
 
   get name() {
     return "Clang Format";
+  }
+
+  async resolveDeps(options) {
+    const clangFormatPath = await getClangFormatPath(options);
+    return { clangFormatPath };
   }
 
   checkDeps(deps) {

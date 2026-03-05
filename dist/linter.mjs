@@ -943,249 +943,6 @@ function validateConcurrency(concurrency) {
   }
 }
 
-// tool-resolve/clang-format.js
-import fs2 from "fs";
-import path2 from "path";
-import os2 from "os";
-import { spawnSync as spawnSync2 } from "child_process";
-
-// tool-resolve/tool-utils.js
-import fs from "fs";
-import path from "path";
-import crypto from "crypto";
-import { execFile, spawnSync } from "child_process";
-import os from "os";
-function getToolPaths(toolsDir) {
-  return {
-    cachePath: path.join(toolsDir, "cache"),
-    extractedPath: path.join(toolsDir, "extracted")
-  };
-}
-function ensureDirExists(dirPath) {
-  if (!fs.existsSync(dirPath)) {
-    fs.mkdirSync(dirPath, { recursive: true });
-  }
-}
-function checkInPath(exeName) {
-  const command = os.platform() === "win32" ? "where" : "which";
-  try {
-    const result = spawnSync(command, [exeName], { encoding: "utf8", stdio: "pipe" });
-    if (result.error || result.status !== 0) {
-      return null;
-    }
-    const foundPath = result.stdout.trim().split(os.EOL)[0];
-    return foundPath || null;
-  } catch {
-    return null;
-  }
-}
-function verifySha256(filePath, expectedSha256) {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha256");
-    const stream = fs.createReadStream(filePath);
-    stream.on("data", (chunk) => hash.update(chunk));
-    stream.on("error", reject);
-    stream.on("end", () => {
-      const actual = hash.digest("hex");
-      if (actual.toLowerCase() !== expectedSha256.toLowerCase()) {
-        reject(new Error(`SHA256 mismatch: expected ${expectedSha256}, got ${actual}`));
-      } else {
-        resolve();
-      }
-    });
-  });
-}
-async function downloadFile(url, destPath, expectedSha256) {
-  const tmpPath = destPath + ".downloading";
-  try {
-    fs.unlinkSync(tmpPath);
-  } catch {
-  }
-  if (fs.existsSync(destPath)) {
-    console.log(`Validating cached ${path.basename(destPath)}...`);
-    try {
-      await verifySha256(destPath, expectedSha256);
-      return;
-    } catch (err) {
-      console.warn(`Cached file is corrupted: ${err.message}`);
-      console.warn(`Deleting and re-downloading...`);
-      fs.unlinkSync(destPath);
-    }
-  }
-  console.log(`Downloading ${path.basename(destPath)} from ${url}...`);
-  await new Promise((resolve, reject) => {
-    execFile(
-      "curl",
-      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", tmpPath, url],
-      { maxBuffer: 10 * 1024 * 1024 },
-      (error, stdout, stderr) => {
-        if (error) {
-          try {
-            fs.unlinkSync(tmpPath);
-          } catch {
-          }
-          reject(new Error(`Download failed: ${error.message}
-${stderr}`));
-          return;
-        }
-        resolve();
-      }
-    );
-  });
-  try {
-    await verifySha256(tmpPath, expectedSha256);
-  } catch (err) {
-    try {
-      fs.unlinkSync(tmpPath);
-    } catch {
-    }
-    throw err;
-  }
-  fs.renameSync(tmpPath, destPath);
-}
-function extractArchive(archivePath, destDir, members = []) {
-  return new Promise((resolve, reject) => {
-    const platform = os.platform();
-    let command, args;
-    if (platform === "win32") {
-      command = "powershell";
-      args = ["-command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force`];
-    } else {
-      ensureDirExists(destDir);
-      command = "tar";
-      args = ["-xf", archivePath, "-C", destDir, ...members];
-    }
-    execFile(command, args, { maxBuffer: 10 * 1024 * 1024 }, (error) => {
-      if (error) {
-        reject(error);
-        return;
-      }
-      resolve();
-    });
-  });
-}
-
-// tool-resolve/clang-format.js
-var VERSION = "21.1.8";
-function checkVersion(exePath) {
-  try {
-    const child = spawnSync2(exePath, ["--version"], { encoding: "utf-8", stdio: "pipe" });
-    if (child.error || child.status !== 0) return "unknown";
-    const match = child.stdout.match(/\bclang-format\s+version\s+([0-9]+(?:\.[0-9]+)*)\b/i);
-    return match ? match[1] : "unknown";
-  } catch {
-    return "unknown";
-  }
-}
-async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
-  const { cachePath: CACHE_PATH, extractedPath: EXTRACTED_PATH } = getToolPaths(toolsDir);
-  const exeName = os2.platform() === "win32" ? "clang-format.exe" : "clang-format";
-  if (shouldSearchInPath) {
-    const systemPath = checkInPath(exeName);
-    if (systemPath) {
-      const systemVersion = checkVersion(systemPath);
-      const systemMajor = parseInt(systemVersion.split(".")[0], 10);
-      const requiredMajor = parseInt(VERSION.split(".")[0], 10);
-      if (systemMajor >= requiredMajor) {
-        console.log(`Using ${systemPath} from system path (version ${systemVersion})`);
-        return systemPath;
-      }
-      console.log(
-        `System clang-format is version ${systemVersion}, need ${requiredMajor}+. Will download ${VERSION}.`
-      );
-    } else {
-      console.log(`${exeName} not found in PATH`);
-    }
-  }
-  if (!shouldDownload) {
-    console.warn("clang-format not found and downloading is disabled");
-    return void 0;
-  }
-  const platform = os2.platform();
-  let url = "";
-  let archiveName = "";
-  let archiveSha256 = "";
-  let archivePathToClangFormat = "";
-  if (platform === "linux") {
-    url = `https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION}/LLVM-${VERSION}-Linux-X64.tar.xz`;
-    archiveName = `LLVM-${VERSION}-Linux-X64.tar.xz`;
-    archiveSha256 = "b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b";
-    archivePathToClangFormat = `LLVM-${VERSION}-Linux-X64/bin/clang-format`;
-  } else {
-    console.warn(`Platform ${platform} not supported for clang-format download`);
-    return void 0;
-  }
-  ensureDirExists(CACHE_PATH);
-  ensureDirExists(EXTRACTED_PATH);
-  const archivePath = path2.join(CACHE_PATH, archiveName);
-  const extractDir = path2.join(EXTRACTED_PATH, `llvm-${VERSION}`);
-  const expectedExe = path2.join(extractDir, archivePathToClangFormat);
-  if (fs2.existsSync(expectedExe)) {
-    console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
-    return expectedExe;
-  }
-  await downloadFile(url, archivePath, archiveSha256);
-  ensureDirExists(extractDir);
-  console.log(`Extracting clang-format from ${archiveName} (single binary, not full LLVM)...`);
-  await extractArchive(archivePath, extractDir, [archivePathToClangFormat]);
-  if (fs2.existsSync(expectedExe)) {
-    console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
-    return expectedExe;
-  }
-  console.warn("Could not find clang-format binary after extraction");
-  return void 0;
-}
-
-// tool-resolve/linelint.js
-import fs3 from "fs";
-import path3 from "path";
-import os3 from "os";
-var VERSION2 = "0.0.6";
-async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
-  const { cachePath: CACHE_PATH } = getToolPaths(toolsDir);
-  const exeName = os3.platform() === "win32" ? "linelint.exe" : "linelint";
-  if (shouldSearchInPath) {
-    const systemPath = checkInPath(exeName);
-    if (systemPath) {
-      console.log(`Using ${systemPath} from system path instead of downloading`);
-      return systemPath;
-    }
-    console.log(`${exeName} not found in PATH`);
-  }
-  if (!shouldDownload) {
-    console.warn("linelint not found and downloading is disabled");
-    return void 0;
-  }
-  const platform = os3.platform();
-  let url = "";
-  let exeSha256 = "";
-  if (platform === "linux") {
-    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION2}/linelint-linux-amd64`;
-    exeSha256 = "16b70fb7b471d6f95cbdc0b4e5dc2b0ac9e84ba9ecdc488f7bdf13df823aca4b";
-  } else if (platform === "win32") {
-    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION2}/linelint-windows-amd64`;
-    exeSha256 = "69793b89716c4a3ed02ff95d922ef95e0224bb987c938e2f8e85af1c79820bf3";
-  } else if (platform === "darwin") {
-    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION2}/linelint-darwin-amd64`;
-    exeSha256 = "2c6264704ea0479666ce2be7140e84c74f6fef8e7e9d9203db9d8bf8ca438e84";
-  } else {
-    console.warn(`Platform ${platform} not supported for linelint download`);
-    return void 0;
-  }
-  ensureDirExists(CACHE_PATH);
-  const destPath = path3.join(CACHE_PATH, exeName);
-  await downloadFile(url, destPath, exeSha256);
-  if (platform !== "win32") {
-    fs3.chmodSync(destPath, 493);
-  }
-  if (fs3.existsSync(destPath)) {
-    console.log(`Using ${destPath}`);
-    return destPath;
-  }
-  console.warn("Could not find linelint binary after download");
-  return void 0;
-}
-
 // util.js
 function ensureCleanExit(child) {
   if (child.error) {
@@ -1201,11 +958,11 @@ function ensureCleanExit(child) {
 }
 
 // checks/crlf-check.js
-import fs5 from "fs/promises";
+import fs2 from "fs/promises";
 
 // checks/base-check.js
-import path4 from "path";
-import fs4 from "fs/promises";
+import path from "path";
+import fs from "fs/promises";
 var BaseCheck = class {
   #extensions;
   #excludePaths;
@@ -1242,13 +999,13 @@ var BaseCheck = class {
       if (file.includes(p)) return false;
     }
     if (this.#extensions.length > 0) {
-      const ext = path4.extname(file).toLowerCase();
+      const ext = path.extname(file).toLowerCase();
       if (!this.#extensions.includes(ext)) return false;
     }
     if (this.#textOnly) {
       let fh;
       try {
-        fh = await fs4.open(file, "r");
+        fh = await fs.open(file, "r");
         const buffer = Buffer.alloc(1024);
         const { bytesRead } = await fh.read(buffer, 0, 1024, 0);
         for (let i = 0; i < bytesRead; i++) {
@@ -1261,6 +1018,17 @@ var BaseCheck = class {
       }
     }
     return true;
+  }
+  /**
+   * Resolve and download tools this check depends on.
+   * Called once before running lint/fix. The returned object is merged
+   * into the shared deps bag.
+   * Subclasses should override to download/locate their tools.
+   * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean, toolsDir: string }} options
+   * @returns {Promise<object>} Key-value pairs to merge into deps.
+   */
+  async resolveDeps(_options) {
+    return {};
   }
   /**
    * Lint (read-only check) a single file.
@@ -1300,7 +1068,7 @@ var CrlfCheck = class extends BaseCheck {
   }
   async lint(file) {
     try {
-      const content = await fs5.readFile(file);
+      const content = await fs2.readFile(file);
       if (content.includes("\r\n")) {
         return { status: "fail", output: "contains CRLF line endings" };
       }
@@ -1311,10 +1079,10 @@ var CrlfCheck = class extends BaseCheck {
   }
   async fix(file) {
     try {
-      const before = await fs5.readFile(file);
+      const before = await fs2.readFile(file);
       if (before.includes("\r\n")) {
         const fixed = before.toString("utf-8").replace(/\r\n/g, "\n");
-        await fs5.writeFile(file, Buffer.from(fixed, "utf-8"));
+        await fs2.writeFile(file, Buffer.from(fixed, "utf-8"));
         return { status: "fixed" };
       }
       return { status: "pass" };
@@ -1334,7 +1102,177 @@ var CrlfCheck = class extends BaseCheck {
 // checks/linelint-check.js
 import { execFile as execFile2 } from "child_process";
 import { promisify } from "util";
-import { promises as fs6 } from "fs";
+import { promises as fs5 } from "fs";
+
+// tool-resolve/linelint.js
+import fs4 from "fs";
+import path3 from "path";
+import os2 from "os";
+
+// tool-resolve/tool-utils.js
+import fs3 from "fs";
+import path2 from "path";
+import crypto from "crypto";
+import { execFile, spawnSync } from "child_process";
+import os from "os";
+function getToolPaths(toolsDir) {
+  return {
+    cachePath: path2.join(toolsDir, "cache"),
+    extractedPath: path2.join(toolsDir, "extracted")
+  };
+}
+function ensureDirExists(dirPath) {
+  if (!fs3.existsSync(dirPath)) {
+    fs3.mkdirSync(dirPath, { recursive: true });
+  }
+}
+function checkInPath(exeName) {
+  const command = os.platform() === "win32" ? "where" : "which";
+  try {
+    const result = spawnSync(command, [exeName], { encoding: "utf8", stdio: "pipe" });
+    if (result.error || result.status !== 0) {
+      return null;
+    }
+    const foundPath = result.stdout.trim().split(os.EOL)[0];
+    return foundPath || null;
+  } catch {
+    return null;
+  }
+}
+function verifySha256(filePath, expectedSha256) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash("sha256");
+    const stream = fs3.createReadStream(filePath);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("error", reject);
+    stream.on("end", () => {
+      const actual = hash.digest("hex");
+      if (actual.toLowerCase() !== expectedSha256.toLowerCase()) {
+        reject(new Error(`SHA256 mismatch: expected ${expectedSha256}, got ${actual}`));
+      } else {
+        resolve();
+      }
+    });
+  });
+}
+async function downloadFile(url, destPath, expectedSha256) {
+  const tmpPath = destPath + ".downloading";
+  try {
+    fs3.unlinkSync(tmpPath);
+  } catch {
+  }
+  if (fs3.existsSync(destPath)) {
+    console.log(`Validating cached ${path2.basename(destPath)}...`);
+    try {
+      await verifySha256(destPath, expectedSha256);
+      return;
+    } catch (err) {
+      console.warn(`Cached file is corrupted: ${err.message}`);
+      console.warn(`Deleting and re-downloading...`);
+      fs3.unlinkSync(destPath);
+    }
+  }
+  console.log(`Downloading ${path2.basename(destPath)} from ${url}...`);
+  await new Promise((resolve, reject) => {
+    execFile(
+      "curl",
+      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", tmpPath, url],
+      { maxBuffer: 10 * 1024 * 1024 },
+      (error, stdout, stderr) => {
+        if (error) {
+          try {
+            fs3.unlinkSync(tmpPath);
+          } catch {
+          }
+          reject(new Error(`Download failed: ${error.message}
+${stderr}`));
+          return;
+        }
+        resolve();
+      }
+    );
+  });
+  try {
+    await verifySha256(tmpPath, expectedSha256);
+  } catch (err) {
+    try {
+      fs3.unlinkSync(tmpPath);
+    } catch {
+    }
+    throw err;
+  }
+  fs3.renameSync(tmpPath, destPath);
+}
+function extractArchive(archivePath, destDir, members = []) {
+  return new Promise((resolve, reject) => {
+    const platform = os.platform();
+    let command, args;
+    if (platform === "win32") {
+      command = "powershell";
+      args = ["-command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force`];
+    } else {
+      ensureDirExists(destDir);
+      command = "tar";
+      args = ["-xf", archivePath, "-C", destDir, ...members];
+    }
+    execFile(command, args, { maxBuffer: 10 * 1024 * 1024 }, (error) => {
+      if (error) {
+        reject(error);
+        return;
+      }
+      resolve();
+    });
+  });
+}
+
+// tool-resolve/linelint.js
+var VERSION = "0.0.6";
+async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH } = getToolPaths(toolsDir);
+  const exeName = os2.platform() === "win32" ? "linelint.exe" : "linelint";
+  if (shouldSearchInPath) {
+    const systemPath = checkInPath(exeName);
+    if (systemPath) {
+      console.log(`Using ${systemPath} from system path instead of downloading`);
+      return systemPath;
+    }
+    console.log(`${exeName} not found in PATH`);
+  }
+  if (!shouldDownload) {
+    console.warn("linelint not found and downloading is disabled");
+    return void 0;
+  }
+  const platform = os2.platform();
+  let url = "";
+  let exeSha256 = "";
+  if (platform === "linux") {
+    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION}/linelint-linux-amd64`;
+    exeSha256 = "16b70fb7b471d6f95cbdc0b4e5dc2b0ac9e84ba9ecdc488f7bdf13df823aca4b";
+  } else if (platform === "win32") {
+    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION}/linelint-windows-amd64`;
+    exeSha256 = "69793b89716c4a3ed02ff95d922ef95e0224bb987c938e2f8e85af1c79820bf3";
+  } else if (platform === "darwin") {
+    url = `https://github.com/fernandrone/linelint/releases/download/${VERSION}/linelint-darwin-amd64`;
+    exeSha256 = "2c6264704ea0479666ce2be7140e84c74f6fef8e7e9d9203db9d8bf8ca438e84";
+  } else {
+    console.warn(`Platform ${platform} not supported for linelint download`);
+    return void 0;
+  }
+  ensureDirExists(CACHE_PATH);
+  const destPath = path3.join(CACHE_PATH, exeName);
+  await downloadFile(url, destPath, exeSha256);
+  if (platform !== "win32") {
+    fs4.chmodSync(destPath, 493);
+  }
+  if (fs4.existsSync(destPath)) {
+    console.log(`Using ${destPath}`);
+    return destPath;
+  }
+  console.warn("Could not find linelint binary after download");
+  return void 0;
+}
+
+// checks/linelint-check.js
 var execFileAsync = promisify(execFile2);
 var LinelintCheck = class extends BaseCheck {
   constructor(repoRoot, options = {}) {
@@ -1342,6 +1280,10 @@ var LinelintCheck = class extends BaseCheck {
   }
   get name() {
     return "Linelint";
+  }
+  async resolveDeps(options) {
+    const linelintPath = await getLinelintPath(options);
+    return { linelintPath };
   }
   checkDeps(deps) {
     return deps.linelintPath !== void 0;
@@ -1361,7 +1303,7 @@ var LinelintCheck = class extends BaseCheck {
   async fix(file, deps) {
     let before;
     try {
-      before = await fs6.readFile(file);
+      before = await fs5.readFile(file);
     } catch (err) {
       return { status: "error", output: err.message };
     }
@@ -1375,7 +1317,7 @@ var LinelintCheck = class extends BaseCheck {
       return { status: "error", output: out || "linelint fix failed" };
     }
     try {
-      const after = await fs6.readFile(file);
+      const after = await fs5.readFile(file);
       if (!before.equals(after)) {
         return { status: "fixed" };
       }
@@ -1397,6 +1339,83 @@ var LinelintCheck = class extends BaseCheck {
 import { promises as fs7 } from "fs";
 import { execFile as execFile3 } from "child_process";
 import { promisify as promisify2 } from "util";
+
+// tool-resolve/clang-format.js
+import fs6 from "fs";
+import path4 from "path";
+import os3 from "os";
+import { spawnSync as spawnSync2 } from "child_process";
+var VERSION2 = "21.1.8";
+function checkVersion(exePath) {
+  try {
+    const child = spawnSync2(exePath, ["--version"], { encoding: "utf-8", stdio: "pipe" });
+    if (child.error || child.status !== 0) return "unknown";
+    const match = child.stdout.match(/\bclang-format\s+version\s+([0-9]+(?:\.[0-9]+)*)\b/i);
+    return match ? match[1] : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH, extractedPath: EXTRACTED_PATH } = getToolPaths(toolsDir);
+  const exeName = os3.platform() === "win32" ? "clang-format.exe" : "clang-format";
+  if (shouldSearchInPath) {
+    const systemPath = checkInPath(exeName);
+    if (systemPath) {
+      const systemVersion = checkVersion(systemPath);
+      const systemMajor = parseInt(systemVersion.split(".")[0], 10);
+      const requiredMajor = parseInt(VERSION2.split(".")[0], 10);
+      if (systemMajor >= requiredMajor) {
+        console.log(`Using ${systemPath} from system path (version ${systemVersion})`);
+        return systemPath;
+      }
+      console.log(
+        `System clang-format is version ${systemVersion}, need ${requiredMajor}+. Will download ${VERSION2}.`
+      );
+    } else {
+      console.log(`${exeName} not found in PATH`);
+    }
+  }
+  if (!shouldDownload) {
+    console.warn("clang-format not found and downloading is disabled");
+    return void 0;
+  }
+  const platform = os3.platform();
+  let url = "";
+  let archiveName = "";
+  let archiveSha256 = "";
+  let archivePathToClangFormat = "";
+  if (platform === "linux") {
+    url = `https://github.com/llvm/llvm-project/releases/download/llvmorg-${VERSION2}/LLVM-${VERSION2}-Linux-X64.tar.xz`;
+    archiveName = `LLVM-${VERSION2}-Linux-X64.tar.xz`;
+    archiveSha256 = "b3b7f2801d15d50736acea3c73982994d025b01c2f035b91ae3b49d1b575732b";
+    archivePathToClangFormat = `LLVM-${VERSION2}-Linux-X64/bin/clang-format`;
+  } else {
+    console.warn(`Platform ${platform} not supported for clang-format download`);
+    return void 0;
+  }
+  ensureDirExists(CACHE_PATH);
+  ensureDirExists(EXTRACTED_PATH);
+  const archivePath = path4.join(CACHE_PATH, archiveName);
+  const extractDir = path4.join(EXTRACTED_PATH, `llvm-${VERSION2}`);
+  const expectedExe = path4.join(extractDir, archivePathToClangFormat);
+  if (fs6.existsSync(expectedExe)) {
+    console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
+    return expectedExe;
+  }
+  await downloadFile(url, archivePath, archiveSha256);
+  ensureDirExists(extractDir);
+  console.log(`Extracting clang-format from ${archiveName} (single binary, not full LLVM)...`);
+  await extractArchive(archivePath, extractDir, [archivePathToClangFormat]);
+  if (fs6.existsSync(expectedExe)) {
+    console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
+    return expectedExe;
+  }
+  console.warn("Could not find clang-format binary after extraction");
+  return void 0;
+}
+
+// checks/clang-format-check.js
 var execFileAsync2 = promisify2(execFile3);
 var ClangFormatCheck = class extends BaseCheck {
   constructor(repoRoot, options = {}) {
@@ -1404,6 +1423,10 @@ var ClangFormatCheck = class extends BaseCheck {
   }
   get name() {
     return "Clang Format";
+  }
+  async resolveDeps(options) {
+    const clangFormatPath = await getClangFormatPath(options);
+    return { clangFormatPath };
   }
   checkDeps(deps) {
     return deps.clangFormatPath !== void 0;
@@ -6235,7 +6258,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path9.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "171db7a" : "unknown";
+var LINTER_COMMIT = true ? "e6d1438" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6351,8 +6374,7 @@ var formatFileResults = (results, file) => {
   }
   return { lines, isFail, stats };
 };
-var runChecks = async (files, checks, { lintOnly = false, verbose = false, clangFormatPath, linelintPath }) => {
-  const deps = { clangFormatPath, linelintPath };
+var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
   const fileToChecks = /* @__PURE__ */ new Map();
   let totalChecks = 0;
   for (const check of checks) {
@@ -6733,20 +6755,15 @@ export class ${className} extends BaseCheck {
       process.exit(0);
     }
     console.log(`Mode: ${mode} | Source: ${fileSource.name} | Checks: ${checks.map((c) => c.name).join(", ")}`);
-    const clangFormatPath = await getClangFormatPath({
-      shouldDownload,
-      shouldSearchInPath,
-      toolsDir
-    });
-    const linelintPath = await getLinelintPath({
-      shouldDownload,
-      shouldSearchInPath,
-      toolsDir
-    });
+    const toolOptions = { shouldDownload, shouldSearchInPath, toolsDir };
+    const deps = {};
+    for (const check of checks) {
+      Object.assign(deps, await check.resolveDeps(toolOptions));
+    }
     const files = await fileSource.resolve();
     console.log(`${fileSource.name}: ${files.length} file(s)`);
     const startTime = Date.now();
-    await runChecks(files, checks, { lintOnly: shouldLint, verbose, clangFormatPath, linelintPath });
+    await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
     const elapsedMs = Date.now() - startTime;
     const minutes = Math.floor(elapsedMs / 6e4);
     const seconds = (elapsedMs % 6e4 / 1e3).toFixed(2);

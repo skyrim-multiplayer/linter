@@ -2,6 +2,7 @@ import { execFile } from "child_process";
 import { promisify } from "util";
 import { BaseCheck } from "./base-check.js";
 import { promises as fs } from "fs";
+import { getLinelintPath } from "../tool-resolve/linelint.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -12,6 +13,11 @@ export class LinelintCheck extends BaseCheck {
 
   get name() {
     return "Linelint";
+  }
+
+  async resolveDeps(options) {
+    const linelintPath = await getLinelintPath(options);
+    return { linelintPath };
   }
 
   checkDeps(deps) {

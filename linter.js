@@ -3,7 +3,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { spawnSync, execSync } from "child_process";
 import pLimit from "p-limit";
-import { getClangFormatPath, getLinelintPath } from "./deps.js";
+
 import { ensureCleanExit } from "./util.js";
 import { builtinRegistry, builtinChecks, builtinFileSources, BaseCheck, BaseFileSource } from "./registry.js";
 
@@ -182,8 +182,7 @@ const formatFileResults = (results, file) => {
  * Lint mode:  all (check, file) pairs run in parallel.
  * Fix mode:   one file at a time (sequential) to avoid races on shared files.
  */
-const runChecks = async (files, checks, { lintOnly = false, verbose = false, clangFormatPath, linelintPath }) => {
-  const deps = { clangFormatPath, linelintPath };
+const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
 
   // Group checks by file instead of a sequential flat array
   const fileToChecks = new Map();
@@ -665,22 +664,17 @@ export class ${className} extends BaseCheck {
 
     console.log(`Mode: ${mode} | Source: ${fileSource.name} | Checks: ${checks.map((c) => c.name).join(", ")}`);
 
-    const clangFormatPath = await getClangFormatPath({
-      shouldDownload,
-      shouldSearchInPath,
-      toolsDir,
-    });
-    const linelintPath = await getLinelintPath({
-      shouldDownload,
-      shouldSearchInPath,
-      toolsDir,
-    });
+    const toolOptions = { shouldDownload, shouldSearchInPath, toolsDir };
+    const deps = {};
+    for (const check of checks) {
+      Object.assign(deps, await check.resolveDeps(toolOptions));
+    }
 
     const files = await fileSource.resolve();
     console.log(`${fileSource.name}: ${files.length} file(s)`);
 
     const startTime = Date.now();
-    await runChecks(files, checks, { lintOnly: shouldLint, verbose, clangFormatPath, linelintPath });
+    await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
     const elapsedMs = Date.now() - startTime;
     const minutes = Math.floor(elapsedMs / 60000);
     const seconds = ((elapsedMs % 60000) / 1000).toFixed(2);
