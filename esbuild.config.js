@@ -1,4 +1,12 @@
 import esbuild from "esbuild";
+import fs from "fs";
+import { execSync } from "child_process";
+
+const pkg = JSON.parse(fs.readFileSync("package.json", "utf-8"));
+let commit = "unknown";
+try {
+  commit = execSync("git rev-parse --short HEAD", { encoding: "utf-8" }).trim();
+} catch {}
 
 await esbuild.build({
   entryPoints: ["linter.js"],
@@ -7,6 +15,10 @@ await esbuild.build({
   target: "node18",
   format: "esm",
   outfile: "dist/linter.mjs",
+  define: {
+    __LINTER_VERSION__: JSON.stringify(pkg.version),
+    __LINTER_COMMIT__: JSON.stringify(commit),
+  },
   banner: {
     // Shebang for global installs + restore __filename / __dirname and
     // a CJS-compatible require() so bundled CJS deps work at runtime.

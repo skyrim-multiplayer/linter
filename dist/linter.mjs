@@ -785,7 +785,7 @@ var require_dist2 = __commonJS({
 import fs12 from "fs";
 import path9 from "path";
 import { fileURLToPath } from "url";
-import { spawnSync as spawnSync3 } from "child_process";
+import { spawnSync as spawnSync3, execSync } from "child_process";
 
 // node_modules/yocto-queue/index.js
 var Node = class {
@@ -6234,6 +6234,10 @@ var builtinRegistry = {
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path9.dirname(__filename);
+var LINTER_VERSION = true ? "0.0.1" : "dev";
+var LINTER_COMMIT = true ? "ba6e843" : "unknown";
+var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
+var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
   const result = spawnSync3("git", ["rev-parse", "--show-toplevel"], {
     encoding: "utf-8"
@@ -6466,6 +6470,83 @@ node "${relLinterPath}" --fix --add --mode hook
   fs12.writeFileSync(hookPath, hookContent, { mode: 493 });
   console.log(`Installed pre-commit hook at ${path9.relative(REPO_ROOT, hookPath)}`);
 };
+var detectInstallMethod = () => {
+  const sep = path9.sep;
+  if (__filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
+    return "package-manager";
+  }
+  let dir = __dirname;
+  while (dir !== path9.dirname(dir)) {
+    const pkg = path9.join(dir, "package.json");
+    const git = path9.join(dir, ".git");
+    if (fs12.existsSync(pkg) && fs12.existsSync(git)) {
+      try {
+        const json = JSON.parse(fs12.readFileSync(pkg, "utf-8"));
+        if (json.name === "@skyrim-multiplayer/linter") return "source";
+      } catch {
+      }
+    }
+    dir = path9.dirname(dir);
+  }
+  return "single-file";
+};
+var printVersion = () => {
+  const method = detectInstallMethod();
+  console.log(`skymp-linter ${LINTER_VERSION} (${LINTER_COMMIT}) [${method}]`);
+};
+var upgrade = () => {
+  const method = detectInstallMethod();
+  console.log(`Current: skymp-linter ${LINTER_VERSION} (${LINTER_COMMIT}) [${method}]`);
+  console.log();
+  switch (method) {
+    case "package-manager": {
+      console.log("Installed via a package manager (yarn/npm/pnpm/bun). Run one of:");
+      console.log();
+      console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
+      console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
+      console.log();
+      break;
+    }
+    case "source": {
+      console.log("Running from source checkout. Run:");
+      console.log();
+      console.log("  git pull && yarn build");
+      console.log();
+      break;
+    }
+    case "single-file": {
+      const tmpPath = __filename + ".tmp";
+      console.log(`Downloading latest linter from ${UPGRADE_URL}...`);
+      try {
+        execSync(
+          `curl -fSL --retry 3 --retry-delay 5 -o "${tmpPath}" "${UPGRADE_URL}"`,
+          { stdio: "inherit" }
+        );
+      } catch {
+        try {
+          fs12.unlinkSync(tmpPath);
+        } catch {
+        }
+        console.error("Download failed.");
+        process.exit(1);
+      }
+      const head = fs12.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      if (!head.startsWith("#!/")) {
+        fs12.unlinkSync(tmpPath);
+        console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
+        process.exit(1);
+      }
+      fs12.renameSync(tmpPath, __filename);
+      fs12.chmodSync(__filename, 493);
+      console.log(`Updated ${__filename}`);
+      try {
+        execSync(`node "${__filename}" --version`, { stdio: "inherit" });
+      } catch {
+      }
+      break;
+    }
+  }
+};
 var printHelp = () => {
   const lines = [];
   lines.push("skymp-linter \u2014 configurable linter runner with built-in checks");
@@ -6480,6 +6561,8 @@ var printHelp = () => {
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
   lines.push("  --create-check <path> Create a custom check template at the given path");
   lines.push("  --help                Show this help message");
+  lines.push("  --version             Show version and install method");
+  lines.push("  --upgrade             Upgrade to the latest version");
   lines.push("");
   lines.push("OPTIONS:");
   lines.push("  --add                 Stage fixed files with git add (requires --fix)");
@@ -6599,6 +6682,14 @@ export class ${className} extends BaseCheck {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
     printHelp();
+    process.exit(0);
+  }
+  if (args.includes("--version") || args.includes("-v")) {
+    printVersion();
+    process.exit(0);
+  }
+  if (args.includes("--upgrade")) {
+    upgrade();
     process.exit(0);
   }
   if (args.includes("--install-hook")) {
