@@ -8,9 +8,10 @@ await esbuild.build({
   format: "esm",
   outfile: "dist/linter.mjs",
   banner: {
-    // Restore __filename / __dirname and a CJS-compatible require()
-    // so that bundled CJS deps (like simple-git internals) work at runtime.
+    // Shebang for global installs + restore __filename / __dirname and
+    // a CJS-compatible require() so bundled CJS deps work at runtime.
     js: [
+      '#!/usr/bin/env node',
       'import { createRequire as __createRequire } from "module";',
       'import { fileURLToPath as __fileURLToPath } from "url";',
       'import { dirname as __dirname_ } from "path";',

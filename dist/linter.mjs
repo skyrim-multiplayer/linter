@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 import { createRequire as __createRequire } from "module";
 import { fileURLToPath as __fileURLToPath } from "url";
 import { dirname as __dirname_ } from "path";

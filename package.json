@@ -1,5 +1,9 @@
 {
+  "name": "@skyrim-multiplayer/linter",
   "type": "module",
+  "bin": {
+    "skymp-linter": "dist/linter.mjs"
+  },
   "scripts": {
     "build": "node esbuild.config.js"
   },

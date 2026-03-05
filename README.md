@@ -6,6 +6,23 @@ A configurable, single-file linter runner with built-in checks for clang-format,
 
 The bundled linter is a single ESM file (`dist/linter.mjs`) with no runtime dependencies beyond Node.js 18+.
 
+### Via yarn (global)
+
+Install from the repo at a specific commit:
+
+```sh
+yarn global add "https://github.com/skyrim-multiplayer/linter#<commit>"
+```
+
+This makes `skymp-linter` available on your PATH:
+
+```sh
+skymp-linter --lint --mode ci
+skymp-linter --install-hook
+```
+
+### Via curl (single-file)
+
 Download and install as a git pre-commit hook in one go:
 
 ```sh
