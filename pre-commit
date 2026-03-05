@@ -1,2 +1,2 @@
 #!/bin/sh
-node misc/git-hooks/dist/linter.mjs --fix --add --mode hook
+node .git/hooks/linter.mjs --fix --add --mode hook
