@@ -6056,7 +6056,18 @@ var AllFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    return output.split("\n").filter((f) => f.trim() !== "").map((f) => path6.resolve(this.repoRoot, f)).filter((f) => fs9.existsSync(f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path6.resolve(this.repoRoot, f));
+    const existing = await Promise.all(
+      files.map(async (filePath) => {
+        try {
+          await fs9.promises.access(filePath, fs9.constants.F_OK);
+          return filePath;
+        } catch {
+          return null;
+        }
+      })
+    );
+    return existing.filter((filePath) => filePath !== null);
   }
 };
 

@@ -15,10 +15,22 @@ export class AllFilesSource extends BaseFileSource {
   async resolve() {
     const git = simpleGit(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    return output
+    const files = output
       .split("\n")
       .filter((f) => f.trim() !== "")
-      .map((f) => path.resolve(this.repoRoot, f))
-      .filter((f) => fs.existsSync(f));
+      .map((f) => path.resolve(this.repoRoot, f));
+
+    const existing = await Promise.all(
+      files.map(async (filePath) => {
+        try {
+          await fs.promises.access(filePath, fs.constants.F_OK);
+          return filePath;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    return existing.filter((filePath) => filePath !== null);
   }
 }
