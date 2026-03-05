@@ -996,6 +996,11 @@ function verifySha256(filePath, expectedSha256) {
   });
 }
 async function downloadFile(url, destPath, expectedSha256) {
+  const tmpPath = destPath + ".downloading";
+  try {
+    fs.unlinkSync(tmpPath);
+  } catch {
+  }
   if (fs.existsSync(destPath)) {
     console.log(`Validating cached ${path.basename(destPath)}...`);
     try {
@@ -1011,12 +1016,12 @@ async function downloadFile(url, destPath, expectedSha256) {
   await new Promise((resolve, reject) => {
     execFile(
       "curl",
-      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", destPath, url],
+      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", tmpPath, url],
       { maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
           try {
-            fs.unlinkSync(destPath);
+            fs.unlinkSync(tmpPath);
           } catch {
           }
           reject(new Error(`Download failed: ${error.message}
@@ -1028,14 +1033,15 @@ ${stderr}`));
     );
   });
   try {
-    await verifySha256(destPath, expectedSha256);
+    await verifySha256(tmpPath, expectedSha256);
   } catch (err) {
     try {
-      fs.unlinkSync(destPath);
+      fs.unlinkSync(tmpPath);
     } catch {
     }
     throw err;
   }
+  fs.renameSync(tmpPath, destPath);
 }
 function extractArchive(archivePath, destDir, members = []) {
   return new Promise((resolve, reject) => {
@@ -1168,17 +1174,12 @@ async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir })
   }
   ensureDirExists(CACHE_PATH);
   const destPath = path3.join(CACHE_PATH, exeName);
-  if (fs3.existsSync(destPath)) {
-    console.log(`Using cached ${destPath}`);
-    return destPath;
-  }
-  console.log(`Downloading linelint v${VERSION2}...`);
   await downloadFile(url, destPath, exeSha256);
   if (platform !== "win32") {
     fs3.chmodSync(destPath, 493);
   }
   if (fs3.existsSync(destPath)) {
-    console.log(`Using downloaded ${destPath}`);
+    console.log(`Using ${destPath}`);
     return destPath;
   }
   console.warn("Could not find linelint binary after download");

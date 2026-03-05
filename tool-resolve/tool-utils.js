@@ -59,9 +59,14 @@ function verifySha256(filePath, expectedSha256) {
 
 /**
  * Download a file using curl (handles redirects, large files reliably).
- * Validates SHA256 after download. Deletes corrupted cached files automatically.
+ * Validates SHA256 after download. Uses atomic temp-file + rename so that
+ * interrupted downloads never leave a corrupt file at the final cache path.
  */
 export async function downloadFile(url, destPath, expectedSha256) {
+  // Clean up leftover temp file from a previously interrupted download
+  const tmpPath = destPath + ".downloading";
+  try { fs.unlinkSync(tmpPath); } catch {}
+
   if (fs.existsSync(destPath)) {
     console.log(`Validating cached ${path.basename(destPath)}...`);
     try {
@@ -79,12 +84,12 @@ export async function downloadFile(url, destPath, expectedSha256) {
   await new Promise((resolve, reject) => {
     execFile(
       "curl",
-      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", destPath, url],
+      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", tmpPath, url],
       { maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
           // Clean up partial download
-          try { fs.unlinkSync(destPath); } catch {}
+          try { fs.unlinkSync(tmpPath); } catch {}
           reject(new Error(`Download failed: ${error.message}\n${stderr}`));
           return;
         }
@@ -93,13 +98,15 @@ export async function downloadFile(url, destPath, expectedSha256) {
     );
   });
 
-  // Verify the downloaded file
+  // Verify the downloaded temp file before promoting to final path
   try {
-    await verifySha256(destPath, expectedSha256);
+    await verifySha256(tmpPath, expectedSha256);
   } catch (err) {
-    try { fs.unlinkSync(destPath); } catch {}
+    try { fs.unlinkSync(tmpPath); } catch {}
     throw err;
   }
+
+  fs.renameSync(tmpPath, destPath);
 }
 
 /**

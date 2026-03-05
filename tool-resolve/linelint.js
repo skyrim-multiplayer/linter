@@ -55,12 +55,6 @@ export async function getLinelintPath({ shouldDownload, shouldSearchInPath, tool
 
   const destPath = path.join(CACHE_PATH, exeName);
 
-  if (fs.existsSync(destPath)) {
-    console.log(`Using cached ${destPath}`);
-    return destPath;
-  }
-
-  console.log(`Downloading linelint v${VERSION}...`);
   await downloadFile(url, destPath, exeSha256);
 
   if (platform !== "win32") {
@@ -68,7 +62,7 @@ export async function getLinelintPath({ shouldDownload, shouldSearchInPath, tool
   }
 
   if (fs.existsSync(destPath)) {
-    console.log(`Using downloaded ${destPath}`);
+    console.log(`Using ${destPath}`);
     return destPath;
   }
 
