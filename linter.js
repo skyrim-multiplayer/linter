@@ -56,6 +56,11 @@ const loadConfig = async (mode) => {
   const configPath = path.join(REPO_ROOT, "linter-config.json");
   const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
 
+  // --- tools directory (configurable, defaults to <repoRoot>/tools) ---
+  const toolsDir = config.toolsDir
+    ? path.resolve(REPO_ROOT, config.toolsDir)
+    : path.join(REPO_ROOT, "tools");
+
   // --- file source ---
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
@@ -76,7 +81,7 @@ const loadConfig = async (mode) => {
     checks.push(new CheckClass(REPO_ROOT, entry.options || {}));
   }
 
-  return { fileSource, checks };
+  return { fileSource, checks, toolsDir };
 };
 
 /**
@@ -318,7 +323,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, cla
   }
 
   try {
-    const { fileSource, checks } = await loadConfig(mode);
+    const { fileSource, checks, toolsDir } = await loadConfig(mode);
 
     if (checks.length === 0) {
       console.log(`No checks enabled for mode "${mode}".`);
@@ -330,10 +335,12 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, cla
     const clangFormatPath = await getClangFormatPath({
       shouldDownload,
       shouldSearchInPath,
+      toolsDir,
     });
     const linelintPath = await getLinelintPath({
       shouldDownload,
       shouldSearchInPath,
+      toolsDir,
     });
 
     const files = await fileSource.resolve();

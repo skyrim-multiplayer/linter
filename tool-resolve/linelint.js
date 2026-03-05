@@ -2,7 +2,7 @@ import fs from "fs";
 import path from "path";
 import os from "os";
 import {
-  CACHE_PATH,
+  getToolPaths,
   ensureDirExists,
   checkInPath,
   downloadFile,
@@ -12,10 +12,11 @@ const VERSION = "0.0.6";
 
 /**
  * Resolve linelint binary path.
- * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean }} options
+ * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean, toolsDir: string }} options
  * @returns {Promise<string|undefined>} Path to binary, or undefined if unavailable.
  */
-export async function getLinelintPath({ shouldDownload, shouldSearchInPath }) {
+export async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH } = getToolPaths(toolsDir);
   const exeName = os.platform() === "win32" ? "linelint.exe" : "linelint";
 
   if (shouldSearchInPath) {

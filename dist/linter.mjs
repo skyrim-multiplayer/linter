@@ -783,7 +783,7 @@ var require_dist2 = __commonJS({
 // linter.js
 import fs12 from "fs";
 import path9 from "path";
-import { fileURLToPath as fileURLToPath2 } from "url";
+import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3 } from "child_process";
 
 // node_modules/yocto-queue/index.js
@@ -954,12 +954,12 @@ import path from "path";
 import crypto from "crypto";
 import { exec, spawnSync } from "child_process";
 import os from "os";
-import { fileURLToPath } from "url";
-var __filename = fileURLToPath(import.meta.url);
-var __dirname = path.dirname(__filename);
-var TOOLS_DIR = path.join(__dirname, "..", "tools");
-var CACHE_PATH = path.join(TOOLS_DIR, "cache");
-var EXTRACTED_PATH = path.join(TOOLS_DIR, "extracted");
+function getToolPaths(toolsDir) {
+  return {
+    cachePath: path.join(toolsDir, "cache"),
+    extractedPath: path.join(toolsDir, "extracted")
+  };
+}
 function ensureDirExists(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -1068,7 +1068,8 @@ function checkVersion(exePath) {
     return "unknown";
   }
 }
-async function getClangFormatPath({ shouldDownload, shouldSearchInPath }) {
+async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH, extractedPath: EXTRACTED_PATH } = getToolPaths(toolsDir);
   const exeName = os2.platform() === "win32" ? "clang-format.exe" : "clang-format";
   if (shouldSearchInPath) {
     const systemPath = checkInPath(exeName);
@@ -1131,7 +1132,8 @@ import fs3 from "fs";
 import path3 from "path";
 import os3 from "os";
 var VERSION2 = "0.0.6";
-async function getLinelintPath({ shouldDownload, shouldSearchInPath }) {
+async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH } = getToolPaths(toolsDir);
   const exeName = os3.platform() === "win32" ? "linelint.exe" : "linelint";
   if (shouldSearchInPath) {
     const systemPath = checkInPath(exeName);
@@ -6121,8 +6123,8 @@ var builtinRegistry = {
 };
 
 // linter.js
-var __filename2 = fileURLToPath2(import.meta.url);
-var __dirname2 = path9.dirname(__filename2);
+var __filename = fileURLToPath(import.meta.url);
+var __dirname = path9.dirname(__filename);
 var getRepoRoot = () => {
   const result = spawnSync3("git", ["rev-parse", "--show-toplevel"], {
     encoding: "utf-8"
@@ -6155,6 +6157,7 @@ var resolveClass = async (entry) => {
 var loadConfig = async (mode) => {
   const configPath = path9.join(REPO_ROOT, "linter-config.json");
   const config = JSON.parse(fs12.readFileSync(configPath, "utf-8"));
+  const toolsDir = config.toolsDir ? path9.resolve(REPO_ROOT, config.toolsDir) : path9.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
     throw new Error(`Unknown mode "${mode}". Available: ${Object.keys(config.modes).join(", ")}`);
@@ -6171,7 +6174,7 @@ var loadConfig = async (mode) => {
     const CheckClass = await resolveClass(entry);
     checks.push(new CheckClass(REPO_ROOT, entry.options || {}));
   }
-  return { fileSource, checks };
+  return { fileSource, checks, toolsDir };
 };
 var relPath = (file) => {
   if (file.startsWith(REPO_ROOT + path9.sep)) {
@@ -6349,7 +6352,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, clang
     process.exit(1);
   }
   try {
-    const { fileSource, checks } = await loadConfig(mode);
+    const { fileSource, checks, toolsDir } = await loadConfig(mode);
     if (checks.length === 0) {
       console.log(`No checks enabled for mode "${mode}".`);
       process.exit(0);
@@ -6357,11 +6360,13 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, clang
     console.log(`Mode: ${mode} | Source: ${fileSource.name} | Checks: ${checks.map((c) => c.name).join(", ")}`);
     const clangFormatPath = await getClangFormatPath({
       shouldDownload,
-      shouldSearchInPath
+      shouldSearchInPath,
+      toolsDir
     });
     const linelintPath = await getLinelintPath({
       shouldDownload,
-      shouldSearchInPath
+      shouldSearchInPath,
+      toolsDir
     });
     const files = await fileSource.resolve();
     console.log(`${fileSource.name}: ${files.length} file(s)`);

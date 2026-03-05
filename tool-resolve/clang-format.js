@@ -3,8 +3,7 @@ import path from "path";
 import os from "os";
 import { spawnSync } from "child_process";
 import {
-  CACHE_PATH,
-  EXTRACTED_PATH,
+  getToolPaths,
   ensureDirExists,
   checkInPath,
   downloadFile,
@@ -26,10 +25,11 @@ function checkVersion(exePath) {
 
 /**
  * Resolve clang-format binary path.
- * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean }} options
+ * @param {{ shouldDownload: boolean, shouldSearchInPath: boolean, toolsDir: string }} options
  * @returns {Promise<string|undefined>} Path to binary, or undefined if unavailable.
  */
-export async function getClangFormatPath({ shouldDownload, shouldSearchInPath }) {
+export async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir }) {
+  const { cachePath: CACHE_PATH, extractedPath: EXTRACTED_PATH } = getToolPaths(toolsDir);
   const exeName = os.platform() === "win32" ? "clang-format.exe" : "clang-format";
 
   if (shouldSearchInPath) {

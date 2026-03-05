@@ -3,15 +3,18 @@ import path from "path";
 import crypto from "crypto";
 import { exec, spawnSync } from "child_process";
 import os from "os";
-import { fileURLToPath } from "url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Download artifacts go into the gitignored tools/ directory
-const TOOLS_DIR = path.join(__dirname, "..", "tools");
-export const CACHE_PATH = path.join(TOOLS_DIR, "cache");
-export const EXTRACTED_PATH = path.join(TOOLS_DIR, "extracted");
+/**
+ * Compute cache/extracted paths from a configurable tools directory.
+ * @param {string} toolsDir  Absolute path to the tools directory.
+ * @returns {{ cachePath: string, extractedPath: string }}
+ */
+export function getToolPaths(toolsDir) {
+  return {
+    cachePath: path.join(toolsDir, "cache"),
+    extractedPath: path.join(toolsDir, "extracted"),
+  };
+}
 
 export function ensureDirExists(dirPath) {
   if (!fs.existsSync(dirPath)) {
