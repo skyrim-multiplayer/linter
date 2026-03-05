@@ -290,6 +290,41 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, cla
 };
 
 /**
+ * Install the linter as a git pre-commit hook.
+ *
+ * Writes a small shell script into .git/hooks/pre-commit that invokes
+ * dist/linter.mjs with --fix --add --mode hook. If a hook already exists
+ * it is backed up to pre-commit.bak before overwriting.
+ */
+const installHook = () => {
+  const gitDirResult = spawnSync("git", ["rev-parse", "--git-dir"], {
+    encoding: "utf-8",
+    cwd: REPO_ROOT,
+  });
+  if (gitDirResult.error || gitDirResult.status !== 0) {
+    console.error("Not a git repository. Cannot install hook.");
+    process.exit(1);
+  }
+  const hooksDir = path.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path.join(hooksDir, "pre-commit");
+
+  // Path from repo root to the current script (works both from source and bundle)
+  const relLinterPath = path.relative(REPO_ROOT, __filename);
+
+  const hookContent = `#!/bin/sh\nnode "${relLinterPath}" --fix --add --mode hook\n`;
+
+  if (fs.existsSync(hookPath)) {
+    const backup = hookPath + ".bak";
+    fs.copyFileSync(hookPath, backup);
+    console.log(`Existing pre-commit hook backed up to ${path.basename(backup)}`);
+  }
+
+  fs.mkdirSync(hooksDir, { recursive: true });
+  fs.writeFileSync(hookPath, hookContent, { mode: 0o755 });
+  console.log(`Installed pre-commit hook at ${path.relative(REPO_ROOT, hookPath)}`);
+};
+
+/**
  * CLI Entry Point
  *
  * Flags:
@@ -300,9 +335,16 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, cla
  *   --no-download    Do not download tools if missing
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
+ *   --install-hook   Install as a git pre-commit hook and exit
  */
 (async () => {
   const args = process.argv.slice(2);
+
+  if (args.includes("--install-hook")) {
+    installHook();
+    process.exit(0);
+  }
+
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
   const shouldAdd = args.includes("--add");

@@ -6344,8 +6344,36 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, clang
   }
   console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
 };
+var installHook = () => {
+  const gitDirResult = spawnSync3("git", ["rev-parse", "--git-dir"], {
+    encoding: "utf-8",
+    cwd: REPO_ROOT
+  });
+  if (gitDirResult.error || gitDirResult.status !== 0) {
+    console.error("Not a git repository. Cannot install hook.");
+    process.exit(1);
+  }
+  const hooksDir = path9.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path9.join(hooksDir, "pre-commit");
+  const relLinterPath = path9.relative(REPO_ROOT, __filename);
+  const hookContent = `#!/bin/sh
+node "${relLinterPath}" --fix --add --mode hook
+`;
+  if (fs12.existsSync(hookPath)) {
+    const backup = hookPath + ".bak";
+    fs12.copyFileSync(hookPath, backup);
+    console.log(`Existing pre-commit hook backed up to ${path9.basename(backup)}`);
+  }
+  fs12.mkdirSync(hooksDir, { recursive: true });
+  fs12.writeFileSync(hookPath, hookContent, { mode: 493 });
+  console.log(`Installed pre-commit hook at ${path9.relative(REPO_ROOT, hookPath)}`);
+};
 (async () => {
   const args = process.argv.slice(2);
+  if (args.includes("--install-hook")) {
+    installHook();
+    process.exit(0);
+  }
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
   const shouldAdd = args.includes("--add");
