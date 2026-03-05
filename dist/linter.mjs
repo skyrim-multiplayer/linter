@@ -1279,6 +1279,14 @@ var BaseCheck = class {
   async fix(file, deps) {
     throw new Error("Not implemented: fix");
   }
+  /**
+   * Return help info for this check class.
+   * Subclasses should override to provide specific details.
+   * @returns {{ name: string, description: string, options: string }}
+   */
+  static getHelp() {
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, excludePaths, textOnly" };
+  }
 };
 
 // checks/crlf-check.js
@@ -1312,6 +1320,13 @@ var CrlfCheck = class extends BaseCheck {
     } catch (err) {
       return { status: "error", output: err.message };
     }
+  }
+  static getHelp() {
+    return {
+      name: "CrlfCheck",
+      description: "Detects and fixes CRLF (\\r\\n) line endings, replacing them with LF (\\n).",
+      options: 'extensions \u2014 file extensions to check (e.g. [".cpp", ".h", ".js"])'
+    };
   }
 };
 
@@ -1368,6 +1383,13 @@ var LinelintCheck = class extends BaseCheck {
       return { status: "error", output: err.message };
     }
   }
+  static getHelp() {
+    return {
+      name: "LinelintCheck",
+      description: "Runs linelint to enforce final-newline and trailing-whitespace rules. Auto-downloads the binary if needed.",
+      options: "(uses linelint config from repo root)"
+    };
+  }
 };
 
 // checks/clang-format-check.js
@@ -1423,6 +1445,13 @@ var ClangFormatCheck = class extends BaseCheck {
       return { status: "error", output: err.message };
     }
   }
+  static getHelp() {
+    return {
+      name: "ClangFormatCheck",
+      description: "Runs clang-format on files. Auto-downloads the binary if needed.",
+      options: 'extensions \u2014 file extensions to format (e.g. [".cpp", ".h"])'
+    };
+  }
 };
 
 // checks/paired-files-check.js
@@ -1474,6 +1503,13 @@ var PairedFilesCheck = class extends BaseCheck {
   }
   async fix(file) {
     return this.lint(file);
+  }
+  static getHelp() {
+    return {
+      name: "PairedFilesCheck",
+      description: "Ensures matching files exist across two directories (e.g. src/*.cpp \u2194 include/*.h). Lint-only, no auto-fix.",
+      options: 'dirs \u2014 array of 2 objects { "path": "...", "ext": "..." }; exclude \u2014 filenames to skip'
+    };
   }
 };
 
@@ -6052,6 +6088,14 @@ var BaseFileSource = class {
   async resolve(context) {
     throw new Error("Not implemented: resolve");
   }
+  /**
+   * Return help info for this file source class.
+   * Subclasses should override to provide specific details.
+   * @returns {{ name: string, description: string, options: string }}
+   */
+  static getHelp() {
+    return { name: "BaseFileSource", description: "Abstract base class for file sources.", options: "" };
+  }
 };
 
 // file-sources/all-files-source.js
@@ -6074,6 +6118,13 @@ var AllFilesSource = class extends BaseFileSource {
       })
     );
     return existing.filter((filePath) => filePath !== null);
+  }
+  static getHelp() {
+    return {
+      name: "AllFilesSource",
+      description: "All git-tracked files in the repo. Typical use: manual full-repo check.",
+      options: "(none)"
+    };
   }
 };
 
@@ -6099,6 +6150,13 @@ var StagedFilesSource = class extends BaseFileSource {
       })
     );
     return existing.filter((filePath) => filePath !== null);
+  }
+  static getHelp() {
+    return {
+      name: "StagedFilesSource",
+      description: "Files currently staged in git (git diff --cached). Typical use: pre-commit hook.",
+      options: "(none)"
+    };
   }
 };
 
@@ -6146,19 +6204,30 @@ var DiffBaseSource = class extends BaseFileSource {
       "DiffBaseSource: cannot determine base ref. Set options.baseRef in config, or run in GitHub Actions (GITHUB_BASE_REF / GITHUB_EVENT_NAME)."
     );
   }
+  static getHelp() {
+    return {
+      name: "DiffBaseSource",
+      description: "Files changed relative to a base branch/ref. Auto-detects GITHUB_BASE_REF in GitHub Actions. Typical use: CI.",
+      options: "baseRef \u2014 explicit base ref to diff against (optional, auto-detected in GHA)"
+    };
+  }
 };
 
 // registry.js
-var builtinRegistry = {
-  // checks
+var builtinChecks = {
   CrlfCheck,
   LinelintCheck,
   ClangFormatCheck,
-  PairedFilesCheck,
-  // file sources
+  PairedFilesCheck
+};
+var builtinFileSources = {
   AllFilesSource,
   StagedFilesSource,
   DiffBaseSource
+};
+var builtinRegistry = {
+  ...builtinChecks,
+  ...builtinFileSources
 };
 
 // linter.js
@@ -6396,10 +6465,157 @@ node "${relLinterPath}" --fix --add --mode hook
   fs12.writeFileSync(hookPath, hookContent, { mode: 493 });
   console.log(`Installed pre-commit hook at ${path9.relative(REPO_ROOT, hookPath)}`);
 };
+var printHelp = () => {
+  const lines = [];
+  lines.push("skymp-linter \u2014 configurable linter runner with built-in checks");
+  lines.push("");
+  lines.push("USAGE:");
+  lines.push("  skymp-linter <command> [options]");
+  lines.push("");
+  lines.push("COMMANDS:");
+  lines.push("  --lint                Run checks in read-only mode (exit 1 on failure)");
+  lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
+  lines.push("  --install-hook        Install as a git pre-commit hook and exit");
+  lines.push("  --init                Generate a minimal linter-config.json in the repo root");
+  lines.push("  --create-check <path> Create a custom check template at the given path");
+  lines.push("  --help                Show this help message");
+  lines.push("");
+  lines.push("OPTIONS:");
+  lines.push("  --add                 Stage fixed files with git add (requires --fix)");
+  lines.push("  --verbose             Print [PASS] lines (hidden by default)");
+  lines.push("  --mode <name>         Execution mode from config (default: manual)");
+  lines.push("  --no-download         Do not download tools if missing");
+  lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("");
+  lines.push("BUILT-IN CHECKS:");
+  for (const [exportName, Cls] of Object.entries(builtinChecks)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+  lines.push("BUILT-IN FILE SOURCES:");
+  for (const [exportName, Cls] of Object.entries(builtinFileSources)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+  lines.push("CONFIGURATION:");
+  lines.push("  Place linter-config.json in the repo root. Run --init to generate one.");
+  lines.push('  Custom checks: extend BaseCheck and reference via "module" + "export" in config.');
+  lines.push("  Run --create-check <path> to scaffold a custom check file.");
+  console.log(lines.join("\n"));
+};
+var initConfig = () => {
+  const configPath = path9.join(REPO_ROOT, "linter-config.json");
+  if (fs12.existsSync(configPath)) {
+    console.error(`linter-config.json already exists at ${configPath}`);
+    process.exit(1);
+  }
+  const checkEntries = Object.keys(builtinChecks).map((exportName) => ({
+    name: exportName.replace(/Check$/, "").replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
+    export: exportName,
+    modes: ["manual", "hook", "ci"],
+    options: {}
+  }));
+  const config = {
+    toolsDir: "tools",
+    modes: {
+      manual: { fileSource: { export: "AllFilesSource" } },
+      hook: { fileSource: { export: "StagedFilesSource" } },
+      ci: { fileSource: { export: "DiffBaseSource", options: {} } }
+    },
+    checks: checkEntries
+  };
+  fs12.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log(`Created ${path9.relative(REPO_ROOT, configPath)}`);
+};
+var createCheck = (targetPath) => {
+  const absPath = path9.resolve(REPO_ROOT, targetPath);
+  if (fs12.existsSync(absPath)) {
+    console.error(`File already exists: ${absPath}`);
+    process.exit(1);
+  }
+  const className = path9.basename(absPath, path9.extname(absPath)).replace(/(^|[-_])(\w)/g, (_, _sep, c) => c.toUpperCase());
+  const template = `import { BaseCheck } from "${path9.relative(path9.dirname(absPath), path9.join(__dirname, "checks", "base-check.js")).replace(/\\\\/g, "/")}";
+
+export class ${className} extends BaseCheck {
+  get name() {
+    return "${className}";
+  }
+
+  /**
+   * Return true if deps needed by this check are available.
+   */
+  checkDeps(deps) {
+    return true;
+  }
+
+  async lint(file, deps) {
+    // TODO: implement lint logic
+    return { status: "pass" };
+  }
+
+  async fix(file, deps) {
+    // TODO: implement fix logic
+    return this.lint(file, deps);
+  }
+
+  static getHelp() {
+    return {
+      name: "${className}",
+      description: "TODO: describe what this check does.",
+      options: "(none)",
+    };
+  }
+}
+`;
+  const dir = path9.dirname(absPath);
+  fs12.mkdirSync(dir, { recursive: true });
+  fs12.writeFileSync(absPath, template);
+  console.log(`Created custom check at ${path9.relative(REPO_ROOT, absPath)}`);
+  console.log(`Add it to linter-config.json:`);
+  console.log(JSON.stringify({
+    name: className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
+    export: className,
+    module: `./${path9.relative(REPO_ROOT, absPath).replace(/\\/g, "/")}`,
+    modes: ["manual"],
+    options: {}
+  }, null, 2));
+};
 (async () => {
   const args = process.argv.slice(2);
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
   if (args.includes("--install-hook")) {
     installHook();
+    process.exit(0);
+  }
+  if (args.includes("--init")) {
+    initConfig();
+    process.exit(0);
+  }
+  const createCheckIndex = args.indexOf("--create-check");
+  if (createCheckIndex !== -1) {
+    const targetPath = args[createCheckIndex + 1];
+    if (!targetPath) {
+      console.error("--create-check requires a file path argument");
+      process.exit(1);
+    }
+    createCheck(targetPath);
     process.exit(0);
   }
   const shouldLint = args.includes("--lint");
@@ -6411,7 +6627,7 @@ node "${relLinterPath}" --fix --add --mode hook
   const modeIndex = args.indexOf("--mode");
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
   if (!shouldLint && !shouldFix) {
-    console.error("Either --lint or --fix must be specified");
+    console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(1);
   }
   if (!shouldFix && shouldAdd) {

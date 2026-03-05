@@ -5,7 +5,7 @@ import { spawnSync } from "child_process";
 import pLimit from "p-limit";
 import { getClangFormatPath, getLinelintPath } from "./deps.js";
 import { ensureCleanExit } from "./util.js";
-import { builtinRegistry } from "./registry.js";
+import { builtinRegistry, builtinChecks, builtinFileSources, BaseCheck, BaseFileSource } from "./registry.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -325,6 +325,160 @@ const installHook = () => {
 };
 
 /**
+ * Print dynamic help text built from the registry.
+ */
+const printHelp = () => {
+  const lines = [];
+  lines.push("skymp-linter — configurable linter runner with built-in checks");
+  lines.push("");
+  lines.push("USAGE:");
+  lines.push("  skymp-linter <command> [options]");
+  lines.push("");
+  lines.push("COMMANDS:");
+  lines.push("  --lint                Run checks in read-only mode (exit 1 on failure)");
+  lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
+  lines.push("  --install-hook        Install as a git pre-commit hook and exit");
+  lines.push("  --init                Generate a minimal linter-config.json in the repo root");
+  lines.push("  --create-check <path> Create a custom check template at the given path");
+  lines.push("  --help                Show this help message");
+  lines.push("");
+  lines.push("OPTIONS:");
+  lines.push("  --add                 Stage fixed files with git add (requires --fix)");
+  lines.push("  --verbose             Print [PASS] lines (hidden by default)");
+  lines.push("  --mode <name>         Execution mode from config (default: manual)");
+  lines.push("  --no-download         Do not download tools if missing");
+  lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("");
+
+  // --- Built-in checks ---
+  lines.push("BUILT-IN CHECKS:");
+  for (const [exportName, Cls] of Object.entries(builtinChecks)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+
+  // --- Built-in file sources ---
+  lines.push("BUILT-IN FILE SOURCES:");
+  for (const [exportName, Cls] of Object.entries(builtinFileSources)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+
+  lines.push("CONFIGURATION:");
+  lines.push("  Place linter-config.json in the repo root. Run --init to generate one.");
+  lines.push("  Custom checks: extend BaseCheck and reference via \"module\" + \"export\" in config.");
+  lines.push("  Run --create-check <path> to scaffold a custom check file.");
+
+  console.log(lines.join("\n"));
+};
+
+/**
+ * Generate a minimal linter-config.json in the repo root.
+ */
+const initConfig = () => {
+  const configPath = path.join(REPO_ROOT, "linter-config.json");
+  if (fs.existsSync(configPath)) {
+    console.error(`linter-config.json already exists at ${configPath}`);
+    process.exit(1);
+  }
+
+  const checkEntries = Object.keys(builtinChecks).map((exportName) => ({
+    name: exportName.replace(/Check$/, "").replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
+    export: exportName,
+    modes: ["manual", "hook", "ci"],
+    options: {},
+  }));
+
+  const config = {
+    toolsDir: "tools",
+    modes: {
+      manual: { fileSource: { export: "AllFilesSource" } },
+      hook: { fileSource: { export: "StagedFilesSource" } },
+      ci: { fileSource: { export: "DiffBaseSource", options: {} } },
+    },
+    checks: checkEntries,
+  };
+
+  fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log(`Created ${path.relative(REPO_ROOT, configPath)}`);
+};
+
+/**
+ * Create a custom check template file at the given path.
+ */
+const createCheck = (targetPath) => {
+  const absPath = path.resolve(REPO_ROOT, targetPath);
+  if (fs.existsSync(absPath)) {
+    console.error(`File already exists: ${absPath}`);
+    process.exit(1);
+  }
+
+  const className = path.basename(absPath, path.extname(absPath))
+    .replace(/(^|[-_])(\w)/g, (_, _sep, c) => c.toUpperCase());
+
+  const template = `import { BaseCheck } from "${path.relative(path.dirname(absPath), path.join(__dirname, "checks", "base-check.js")).replace(/\\\\/g, "/")}";
+
+export class ${className} extends BaseCheck {
+  get name() {
+    return "${className}";
+  }
+
+  /**
+   * Return true if deps needed by this check are available.
+   */
+  checkDeps(deps) {
+    return true;
+  }
+
+  async lint(file, deps) {
+    // TODO: implement lint logic
+    return { status: "pass" };
+  }
+
+  async fix(file, deps) {
+    // TODO: implement fix logic
+    return this.lint(file, deps);
+  }
+
+  static getHelp() {
+    return {
+      name: "${className}",
+      description: "TODO: describe what this check does.",
+      options: "(none)",
+    };
+  }
+}
+`;
+
+  const dir = path.dirname(absPath);
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(absPath, template);
+  console.log(`Created custom check at ${path.relative(REPO_ROOT, absPath)}`);
+  console.log(`Add it to linter-config.json:`);
+  console.log(JSON.stringify({
+    name: className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
+    export: className,
+    module: `./${path.relative(REPO_ROOT, absPath).replace(/\\/g, "/")}`,
+    modes: ["manual"],
+    options: {},
+  }, null, 2));
+};
+
+/**
  * CLI Entry Point
  *
  * Flags:
@@ -336,12 +490,36 @@ const installHook = () => {
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
  *   --install-hook   Install as a git pre-commit hook and exit
+ *   --help           Show help message
+ *   --init           Generate minimal linter-config.json
+ *   --create-check   Create a custom check template
  */
 (async () => {
   const args = process.argv.slice(2);
 
+  if (args.includes("--help") || args.includes("-h")) {
+    printHelp();
+    process.exit(0);
+  }
+
   if (args.includes("--install-hook")) {
     installHook();
+    process.exit(0);
+  }
+
+  if (args.includes("--init")) {
+    initConfig();
+    process.exit(0);
+  }
+
+  const createCheckIndex = args.indexOf("--create-check");
+  if (createCheckIndex !== -1) {
+    const targetPath = args[createCheckIndex + 1];
+    if (!targetPath) {
+      console.error("--create-check requires a file path argument");
+      process.exit(1);
+    }
+    createCheck(targetPath);
     process.exit(0);
   }
 
@@ -356,7 +534,7 @@ const installHook = () => {
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
 
   if (!shouldLint && !shouldFix) {
-    console.error("Either --lint or --fix must be specified");
+    console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(1);
   }
   if (!shouldFix && shouldAdd) {

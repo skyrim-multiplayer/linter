@@ -111,4 +111,13 @@ export class BaseCheck {
   async fix(file, deps) {
     throw new Error("Not implemented: fix");
   }
+
+  /**
+   * Return help info for this check class.
+   * Subclasses should override to provide specific details.
+   * @returns {{ name: string, description: string, options: string }}
+   */
+  static getHelp() {
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, excludePaths, textOnly" };
+  }
 }

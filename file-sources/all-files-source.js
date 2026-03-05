@@ -33,4 +33,12 @@ export class AllFilesSource extends BaseFileSource {
 
     return existing.filter((filePath) => filePath !== null);
   }
+
+  static getHelp() {
+    return {
+      name: "AllFilesSource",
+      description: "All git-tracked files in the repo. Typical use: manual full-repo check.",
+      options: "(none)",
+    };
+  }
 }

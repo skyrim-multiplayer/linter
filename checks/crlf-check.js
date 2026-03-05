@@ -35,4 +35,12 @@ export class CrlfCheck extends BaseCheck {
       return { status: "error", output: err.message };
     }
   }
+
+  static getHelp() {
+    return {
+      name: "CrlfCheck",
+      description: "Detects and fixes CRLF (\\r\\n) line endings, replacing them with LF (\\n).",
+      options: "extensions — file extensions to check (e.g. [\".cpp\", \".h\", \".js\"])",
+    };
+  }
 }

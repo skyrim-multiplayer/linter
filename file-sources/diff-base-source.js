@@ -70,4 +70,12 @@ export class DiffBaseSource extends BaseFileSource {
         "Set options.baseRef in config, or run in GitHub Actions (GITHUB_BASE_REF / GITHUB_EVENT_NAME)."
     );
   }
+
+  static getHelp() {
+    return {
+      name: "DiffBaseSource",
+      description: "Files changed relative to a base branch/ref. Auto-detects GITHUB_BASE_REF in GitHub Actions. Typical use: CI.",
+      options: "baseRef — explicit base ref to diff against (optional, auto-detected in GHA)",
+    };
+  }
 }

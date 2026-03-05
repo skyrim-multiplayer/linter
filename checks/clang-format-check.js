@@ -59,4 +59,12 @@ export class ClangFormatCheck extends BaseCheck {
       return { status: "error", output: err.message };
     }
   }
+
+  static getHelp() {
+    return {
+      name: "ClangFormatCheck",
+      description: "Runs clang-format on files. Auto-downloads the binary if needed.",
+      options: "extensions — file extensions to format (e.g. [\".cpp\", \".h\"])",
+    };
+  }
 }

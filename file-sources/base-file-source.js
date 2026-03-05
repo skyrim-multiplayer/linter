@@ -23,4 +23,13 @@ export class BaseFileSource {
   async resolve(context) {
     throw new Error("Not implemented: resolve");
   }
+
+  /**
+   * Return help info for this file source class.
+   * Subclasses should override to provide specific details.
+   * @returns {{ name: string, description: string, options: string }}
+   */
+  static getHelp() {
+    return { name: "BaseFileSource", description: "Abstract base class for file sources.", options: "" };
+  }
 }

@@ -19,14 +19,25 @@ import { AllFilesSource } from "./file-sources/all-files-source.js";
 import { StagedFilesSource } from "./file-sources/staged-files-source.js";
 import { DiffBaseSource } from "./file-sources/diff-base-source.js";
 
-export const builtinRegistry = {
-  // checks
+import { BaseCheck } from "./checks/base-check.js";
+import { BaseFileSource } from "./file-sources/base-file-source.js";
+
+export const builtinChecks = {
   CrlfCheck,
   LinelintCheck,
   ClangFormatCheck,
   PairedFilesCheck,
-  // file sources
+};
+
+export const builtinFileSources = {
   AllFilesSource,
   StagedFilesSource,
   DiffBaseSource,
 };
+
+export const builtinRegistry = {
+  ...builtinChecks,
+  ...builtinFileSources,
+};
+
+export { BaseCheck, BaseFileSource };

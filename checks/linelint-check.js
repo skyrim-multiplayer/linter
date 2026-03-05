@@ -59,4 +59,12 @@ export class LinelintCheck extends BaseCheck {
       return { status: "error", output: err.message };
     }
   }
+
+  static getHelp() {
+    return {
+      name: "LinelintCheck",
+      description: "Runs linelint to enforce final-newline and trailing-whitespace rules. Auto-downloads the binary if needed.",
+      options: "(uses linelint config from repo root)",
+    };
+  }
 }

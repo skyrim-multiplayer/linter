@@ -33,4 +33,12 @@ export class StagedFilesSource extends BaseFileSource {
 
     return existing.filter((filePath) => filePath !== null);
   }
+
+  static getHelp() {
+    return {
+      name: "StagedFilesSource",
+      description: "Files currently staged in git (git diff --cached). Typical use: pre-commit hook.",
+      options: "(none)",
+    };
+  }
 }

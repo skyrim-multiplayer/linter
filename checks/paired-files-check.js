@@ -70,4 +70,12 @@ export class PairedFilesCheck extends BaseCheck {
     // No auto-fix — just re-run lint so caller sees the status
     return this.lint(file);
   }
+
+  static getHelp() {
+    return {
+      name: "PairedFilesCheck",
+      description: "Ensures matching files exist across two directories (e.g. src/*.cpp ↔ include/*.h). Lint-only, no auto-fix.",
+      options: 'dirs — array of 2 objects { "path": "...", "ext": "..." }; exclude — filenames to skip',
+    };
+  }
 }
