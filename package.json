@@ -6,7 +6,11 @@
     "skymp-linter": "dist/linter.mjs"
   },
   "scripts": {
-    "build": "node esbuild.config.js"
+    "postinstall": "mkdir -p .linter && curl -fsSL https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs -o .linter/linter.mjs",
+    "build": "node esbuild.config.js",
+    "lint": "node .linter/linter.mjs --lint",
+    "fix": "node .linter/linter.mjs --fix",
+    "update-linter": "cp dist/linter.mjs .linter/linter.mjs"
   },
   "dependencies": {
     "p-limit": "^7.3.0",

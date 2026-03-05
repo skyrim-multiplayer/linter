@@ -1,0 +1,28 @@
+{
+  "toolsDir": ".linter/tools",
+  "modes": {
+    "manual": {
+      "fileSource": { "export": "AllFilesSource" }
+    },
+    "hook": {
+      "fileSource": { "export": "StagedFilesSource" }
+    },
+    "ci": {
+      "fileSource": { "export": "DiffBaseSource", "options": {} }
+    }
+  },
+  "checks": [
+    {
+      "name": "crlf",
+      "export": "CrlfCheck",
+      "modes": ["manual", "hook", "ci"],
+      "options": { "extensions": [".js", ".json", ".md"] }
+    },
+    {
+      "name": "linelint",
+      "export": "LinelintCheck",
+      "modes": ["manual", "hook", "ci"],
+      "options": {}
+    }
+  ]
+}
