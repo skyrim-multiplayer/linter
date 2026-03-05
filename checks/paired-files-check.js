@@ -35,6 +35,7 @@ export class PairedFilesCheck extends BaseCheck {
   }
 
   async appliesTo(file) {
+    if (!(await super.appliesTo(file))) return false;
     const basename = path.basename(file).toLowerCase();
     if (this.#exclude.has(basename)) return false;
     return this.#absDirs.some((d) => file.startsWith(d.abs + path.sep));

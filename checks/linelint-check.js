@@ -45,9 +45,8 @@ export class LinelintCheck extends BaseCheck {
       if (err.code === "ENOENT") {
         return { status: "error", output: err.message };
       }
-      // linelint supposedly returns 0 on success fix, but maybe not? let's ignore non-0 or pass it?
-      // actually if it errors, we just proceed to diffing below anyway, but maybe it failed to run.
-      // we'll see
+      const out = (err.stderr || err.stdout || "").toString().trim();
+      return { status: "error", output: out || "linelint fix failed" };
     }
 
     try {

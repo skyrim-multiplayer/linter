@@ -54,7 +54,7 @@ const resolveClass = async (entry) => {
  */
 const loadConfig = async (mode) => {
   const configPath = path.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+  const config = JSON.parse(await fs.promises.readFile(configPath, "utf-8"));
 
   // --- tools directory (configurable, defaults to <repoRoot>/tools) ---
   const toolsDir = config.toolsDir

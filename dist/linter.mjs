@@ -952,7 +952,7 @@ import { spawnSync as spawnSync2 } from "child_process";
 import fs from "fs";
 import path from "path";
 import crypto from "crypto";
-import { exec, spawnSync } from "child_process";
+import { execFile, spawnSync } from "child_process";
 import os from "os";
 function getToolPaths(toolsDir) {
   return {
@@ -1008,8 +1008,9 @@ async function downloadFile(url, destPath, expectedSha256) {
   }
   console.log(`Downloading ${path.basename(destPath)} from ${url}...`);
   await new Promise((resolve, reject) => {
-    exec(
-      `curl -fSL --retry 3 --retry-delay 5 -o "${destPath}" "${url}"`,
+    execFile(
+      "curl",
+      ["-fSL", "--retry", "3", "--retry-delay", "5", "-o", destPath, url],
       { maxBuffer: 10 * 1024 * 1024 },
       (error, stdout, stderr) => {
         if (error) {
@@ -1038,15 +1039,16 @@ ${stderr}`));
 function extractArchive(archivePath, destDir, members = []) {
   return new Promise((resolve, reject) => {
     const platform = os.platform();
-    let command;
+    let command, args;
     if (platform === "win32") {
-      command = `powershell -command "Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force"`;
+      command = "powershell";
+      args = ["-command", `Expand-Archive -Path '${archivePath}' -DestinationPath '${destDir}' -Force`];
     } else {
       ensureDirExists(destDir);
-      const memberArgs = members.map((m) => `"${m}"`).join(" ");
-      command = `tar -xf "${archivePath}" -C "${destDir}" ${memberArgs}`;
+      command = "tar";
+      args = ["-xf", archivePath, "-C", destDir, ...members];
     }
-    exec(command, { maxBuffer: 10 * 1024 * 1024 }, (error) => {
+    execFile(command, args, { maxBuffer: 10 * 1024 * 1024 }, (error) => {
       if (error) {
         reject(error);
         return;
@@ -1313,10 +1315,10 @@ var CrlfCheck = class extends BaseCheck {
 };
 
 // checks/linelint-check.js
-import { execFile } from "child_process";
+import { execFile as execFile2 } from "child_process";
 import { promisify } from "util";
 import { promises as fs6 } from "fs";
-var execFileAsync = promisify(execFile);
+var execFileAsync = promisify(execFile2);
 var LinelintCheck = class extends BaseCheck {
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
@@ -1352,6 +1354,8 @@ var LinelintCheck = class extends BaseCheck {
       if (err.code === "ENOENT") {
         return { status: "error", output: err.message };
       }
+      const out = (err.stderr || err.stdout || "").toString().trim();
+      return { status: "error", output: out || "linelint fix failed" };
     }
     try {
       const after = await fs6.readFile(file);
@@ -1367,9 +1371,9 @@ var LinelintCheck = class extends BaseCheck {
 
 // checks/clang-format-check.js
 import { promises as fs7 } from "fs";
-import { execFile as execFile2 } from "child_process";
+import { execFile as execFile3 } from "child_process";
 import { promisify as promisify2 } from "util";
-var execFileAsync2 = promisify2(execFile2);
+var execFileAsync2 = promisify2(execFile3);
 var ClangFormatCheck = class extends BaseCheck {
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
@@ -1442,6 +1446,7 @@ var PairedFilesCheck = class extends BaseCheck {
     return "Paired Files Check";
   }
   async appliesTo(file) {
+    if (!await super.appliesTo(file)) return false;
     const basename = path5.basename(file).toLowerCase();
     if (this.#exclude.has(basename)) return false;
     return this.#absDirs.some((d) => file.startsWith(d.abs + path5.sep));
@@ -6080,8 +6085,19 @@ var StagedFilesSource = class extends BaseFileSource {
   }
   async resolve() {
     const git = esm_default(this.repoRoot);
-    const output = await git.diff(["--name-only", "--cached"]);
-    return output.split("\n").filter((f) => f.trim() !== "").map((f) => path7.resolve(this.repoRoot, f)).filter((f) => fs10.existsSync(f));
+    const output = await git.diff(["--name-only", "--diff-filter=ACMR", "--cached"]);
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path7.resolve(this.repoRoot, f));
+    const existing = await Promise.all(
+      files.map(async (filePath) => {
+        try {
+          await fs10.promises.access(filePath, fs10.constants.F_OK);
+          return filePath;
+        } catch {
+          return null;
+        }
+      })
+    );
+    return existing.filter((filePath) => filePath !== null);
   }
 };
 
@@ -6097,7 +6113,18 @@ var DiffBaseSource = class extends BaseFileSource {
     console.log(`DiffBaseSource: diffing against ${baseRef}`);
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", baseRef]);
-    return output.split("\n").filter((f) => f.trim() !== "").map((f) => path8.resolve(this.repoRoot, f)).filter((f) => fs11.existsSync(f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path8.resolve(this.repoRoot, f));
+    const existing = await Promise.all(
+      files.map(async (filePath) => {
+        try {
+          await fs11.promises.access(filePath, fs11.constants.F_OK);
+          return filePath;
+        } catch {
+          return null;
+        }
+      })
+    );
+    return existing.filter((filePath) => filePath !== null);
   }
   #detectBaseRef() {
     if (this.options.baseRef) {
@@ -6167,7 +6194,7 @@ var resolveClass = async (entry) => {
 };
 var loadConfig = async (mode) => {
   const configPath = path9.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(fs12.readFileSync(configPath, "utf-8"));
+  const config = JSON.parse(await fs12.promises.readFile(configPath, "utf-8"));
   const toolsDir = config.toolsDir ? path9.resolve(REPO_ROOT, config.toolsDir) : path9.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
