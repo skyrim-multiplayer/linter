@@ -206,7 +206,10 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
     }
   }
 
-  const groupedWork = Array.from(fileToChecks.entries()).map(([file, fileChecks]) => ({ file, checks: fileChecks }));
+  const groupedWork = Array.from(fileToChecks.entries()).map(([file, fileChecks]) => {
+    fileChecks.sort((a, b) => a.priority - b.priority);
+    return { file, checks: fileChecks };
+  });
 
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");

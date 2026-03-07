@@ -968,12 +968,20 @@ var BaseCheck = class {
   #includePaths;
   #excludePaths;
   #textOnly;
+  #priority;
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
     this.#extensions = (options.extensions || []).map((e) => e.toLowerCase());
     this.#includePaths = options.includePaths || [];
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
+    this.#priority = options.priority ?? 0;
+  }
+  /**
+   * @returns {number} Numeric priority (lower runs first).
+   */
+  get priority() {
+    return this.#priority;
   }
   /**
    * @returns {string} Human-readable name of the check.
@@ -1059,7 +1067,7 @@ var BaseCheck = class {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority" };
   }
 };
 
@@ -6533,7 +6541,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "4f4415e" : "unknown";
+var LINTER_COMMIT = true ? "4a8a27e" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6668,7 +6676,10 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
       }
     }
   }
-  const groupedWork = Array.from(fileToChecks.entries()).map(([file, fileChecks]) => ({ file, checks: fileChecks }));
+  const groupedWork = Array.from(fileToChecks.entries()).map(([file, fileChecks]) => {
+    fileChecks.sort((a, b) => a.priority - b.priority);
+    return { file, checks: fileChecks };
+  });
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
     return;

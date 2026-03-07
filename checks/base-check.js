@@ -20,6 +20,7 @@ import fs from "fs/promises";
  *   options.includePaths - array of path substrings; file must match at least one (if set)
  *   options.excludePaths - array of path substrings to skip
  *   options.textOnly     - if true, skip binary files (default: false)
+ *   options.priority     - numeric priority (lower runs first, default: 0)
  *
  * All methods that touch files are async.
  * appliesTo(), lint() and fix() return Promises.
@@ -31,6 +32,7 @@ export class BaseCheck {
   #includePaths;
   #excludePaths;
   #textOnly;
+  #priority;
 
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
@@ -38,6 +40,14 @@ export class BaseCheck {
     this.#includePaths = options.includePaths || [];
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
+    this.#priority = options.priority ?? 0;
+  }
+
+  /**
+   * @returns {number} Numeric priority (lower runs first).
+   */
+  get priority() {
+    return this.#priority;
   }
 
   /**
@@ -138,6 +148,6 @@ export class BaseCheck {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority" };
   }
 }
