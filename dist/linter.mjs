@@ -6358,7 +6358,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path10.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "27fca23" : "unknown";
+var LINTER_COMMIT = true ? "e71056a" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6847,7 +6847,7 @@ export class ${className} extends BaseCheck {
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
-    process.exit(1);
+    process.exit(127);
   }
   try {
     const { fileSource, checks, toolsDir } = await loadConfig(mode);

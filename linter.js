@@ -664,7 +664,7 @@ export class ${className} extends BaseCheck {
 
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
-    process.exit(1);
+    process.exit(127);
   }
   try {
     const { fileSource, checks, toolsDir } = await loadConfig(mode);
