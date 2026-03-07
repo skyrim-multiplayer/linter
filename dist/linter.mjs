@@ -6258,7 +6258,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path9.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "e6d1438" : "unknown";
+var LINTER_COMMIT = true ? "4a29e92" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6494,6 +6494,12 @@ node "${relLinterPath}" --fix --add --mode hook
 };
 var detectInstallMethod = () => {
   const sep = path9.sep;
+  if (__filename.includes(`${sep}yarn${sep}global${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
+    return "yarn";
+  }
+  if (__filename.includes(`${sep}lib${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
+    return "npm";
+  }
   if (__filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "package-manager";
   }
@@ -6521,10 +6527,30 @@ var upgrade = () => {
   console.log(`Current: skymp-linter ${LINTER_VERSION} (${LINTER_COMMIT}) [${method}]`);
   console.log();
   switch (method) {
-    case "package-manager": {
-      console.log("Installed via a package manager (yarn/npm/pnpm/bun). Run one of:");
+    case "yarn": {
+      console.log("Installed via yarn. Remove the old global version first, then install the latest:");
       console.log();
+      console.log("  yarn global remove @skyrim-multiplayer/linter");
       console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
+      console.log();
+      break;
+    }
+    case "npm": {
+      console.log("Installed via npm. Remove the old global version first, then install the latest:");
+      console.log();
+      console.log("  npm uninstall -g @skyrim-multiplayer/linter");
+      console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
+      console.log();
+      break;
+    }
+    case "package-manager": {
+      console.log("Installed via a package manager, but it could not be identified automatically.");
+      console.log("Remove the old global version first, then install the latest. Run one set:");
+      console.log();
+      console.log("  yarn global remove @skyrim-multiplayer/linter");
+      console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
+      console.log();
+      console.log("  npm uninstall -g @skyrim-multiplayer/linter");
       console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
       console.log();
       break;
