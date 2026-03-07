@@ -6258,7 +6258,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path9.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "4a29e92" : "unknown";
+var LINTER_COMMIT = true ? "8dc9f71" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6528,9 +6528,8 @@ var upgrade = () => {
   console.log();
   switch (method) {
     case "yarn": {
-      console.log("Installed via yarn. Remove the old global version first, then install the latest:");
+      console.log("Installed via yarn. Install the latest version:");
       console.log();
-      console.log("  yarn global remove @skyrim-multiplayer/linter");
       console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
       console.log();
       break;
@@ -6545,9 +6544,8 @@ var upgrade = () => {
     }
     case "package-manager": {
       console.log("Installed via a package manager, but it could not be identified automatically.");
-      console.log("Remove the old global version first, then install the latest. Run one set:");
+      console.log("Run one set to upgrade:");
       console.log();
-      console.log("  yarn global remove @skyrim-multiplayer/linter");
       console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
       console.log();
       console.log("  npm uninstall -g @skyrim-multiplayer/linter");

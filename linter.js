@@ -384,11 +384,11 @@ const upgrade = () => {
   console.log(`Current: skymp-linter ${LINTER_VERSION} (${LINTER_COMMIT}) [${method}]`);
   console.log();
 
+  // TODO: Research best-practice global upgrade commands for npm/yarn/pnpm/bun.
   switch (method) {
     case "yarn": {
-      console.log("Installed via yarn. Remove the old global version first, then install the latest:");
+      console.log("Installed via yarn. Install the latest version:");
       console.log();
-      console.log("  yarn global remove @skyrim-multiplayer/linter");
       console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
       console.log();
       break;
@@ -403,9 +403,8 @@ const upgrade = () => {
     }
     case "package-manager": {
       console.log("Installed via a package manager, but it could not be identified automatically.");
-      console.log("Remove the old global version first, then install the latest. Run one set:");
+      console.log("Run one set to upgrade:");
       console.log();
-      console.log("  yarn global remove @skyrim-multiplayer/linter");
       console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
       console.log();
       console.log("  npm uninstall -g @skyrim-multiplayer/linter");
