@@ -23,6 +23,16 @@
       "export": "LinelintCheck",
       "modes": ["manual", "hook", "ci"],
       "options": {}
+    },
+    {
+      "name": "codegen",
+      "export": "CodegenCheck",
+      "modes": ["manual", "hook", "ci"],
+      "options": {
+        "command": "node esbuild.config.js",
+        "inputFile": "linter.js",
+        "outputFile": "dist/linter.mjs"
+      }
     }
   ]
 }
