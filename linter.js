@@ -184,6 +184,8 @@ const formatFileResults = (results, file) => {
  */
 const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
 
+  const extraFiles = new Set();
+
   // Group checks by file instead of a sequential flat array
   const fileToChecks = new Map();
   let totalChecks = 0;
@@ -258,6 +260,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
       for (const check of checks) {
         try {
           const res = await check.fix(file, deps);
+          if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
           fileResults.push({ res, checkName: check.name });
         } catch (err) {
           fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name });
@@ -293,13 +296,15 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
   }
 
   console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
+
+  return { extraFiles };
 };
 
 /**
  * Install the linter as a git pre-commit hook.
  *
  * Writes a small shell script into .git/hooks/pre-commit that invokes
- * dist/linter.mjs with --fix --add --mode hook. If a hook already exists
+ * dist/linter.mjs with --fix --mode hook. If a hook already exists
  * it is backed up to pre-commit.bak before overwriting.
  */
 const installHook = () => {
@@ -317,7 +322,7 @@ const installHook = () => {
   // Path from repo root to the current script (works both from source and bundle)
   const relLinterPath = path.relative(REPO_ROOT, __filename);
 
-  const hookContent = `#!/bin/sh\nnode "${relLinterPath}" --fix --add --mode hook\n`;
+  const hookContent = `#!/bin/sh\nnode "${relLinterPath}" --fix --mode hook\n`;
 
   if (fs.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
@@ -457,7 +462,7 @@ const printHelp = () => {
   lines.push("  --upgrade             Upgrade to the latest version");
   lines.push("");
   lines.push("OPTIONS:");
-  lines.push("  --add                 Stage fixed files with git add (requires --fix)");
+
   lines.push("  --verbose             Print [PASS] lines (hidden by default)");
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
   lines.push("  --no-download         Do not download tools if missing");
@@ -599,7 +604,6 @@ export class ${className} extends BaseCheck {
  *   --verbose        Show [PASS] lines (hidden by default)
  *   --lint           Run checks in read-only mode (exit 1 on failure)
  *   --fix            Run checks in fix mode (modify files in-place)
- *   --add            Stage fixed files with git add (requires --fix)
  *   --no-download    Do not download tools if missing
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
@@ -651,7 +655,6 @@ export class ${className} extends BaseCheck {
 
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
-  const shouldAdd = args.includes("--add");
   const verbose = args.includes("--verbose");
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
@@ -663,11 +666,6 @@ export class ${className} extends BaseCheck {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(1);
   }
-  if (!shouldFix && shouldAdd) {
-    console.error("--add makes no sense without --fix");
-    process.exit(1);
-  }
-
   try {
     const { fileSource, checks, toolsDir } = await loadConfig(mode);
 
@@ -688,7 +686,7 @@ export class ${className} extends BaseCheck {
     console.log(`${fileSource.name}: ${files.length} file(s)`);
 
     const startTime = Date.now();
-    await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
+    const runResult = await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
     const elapsedMs = Date.now() - startTime;
     const minutes = Math.floor(elapsedMs / 60000);
     const seconds = ((elapsedMs % 60000) / 1000).toFixed(2);
@@ -707,13 +705,10 @@ export class ${className} extends BaseCheck {
       process.exit(0);
     }
 
-    if (shouldAdd) {
-      files.forEach((file) =>
+    if (mode === "hook") {
+      const allFiles = [...files, ...(runResult.extraFiles || [])];
+      allFiles.forEach((file) =>
         ensureCleanExit(spawnSync("git", ["add", file], { stdio: "inherit" }))
-      );
-    } else {
-      console.log(
-        "Files were not staged (use --add to stage automatically)."
       );
     }
   } catch (err) {

@@ -1609,7 +1609,7 @@ var CodegenCheck = class extends BaseCheck {
     } catch (err) {
       return { status: "error", output: `command failed: ${err}` };
     }
-    return { status: "fixed" };
+    return { status: "fixed", extraFiles: [this.#absOutput] };
   }
   async #runCommand() {
     const parts = this.#command.split(/\s+/);
@@ -6358,7 +6358,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path10.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "a48724d" : "unknown";
+var LINTER_COMMIT = true ? "27fca23" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6475,6 +6475,7 @@ var formatFileResults = (results, file) => {
   return { lines, isFail, stats };
 };
 var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
+  const extraFiles = /* @__PURE__ */ new Set();
   const fileToChecks = /* @__PURE__ */ new Map();
   let totalChecks = 0;
   for (const check of checks) {
@@ -6537,6 +6538,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
       for (const check of checks2) {
         try {
           const res = await check.fix(file, deps);
+          if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
           fileResults.push({ res, checkName: check.name });
         } catch (err) {
           fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name });
@@ -6567,6 +6569,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
     process.exit(1);
   }
   console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
+  return { extraFiles };
 };
 var installHook = () => {
   const gitDirResult = spawnSync3("git", ["rev-parse", "--git-dir"], {
@@ -6581,7 +6584,7 @@ var installHook = () => {
   const hookPath = path10.join(hooksDir, "pre-commit");
   const relLinterPath = path10.relative(REPO_ROOT, __filename);
   const hookContent = `#!/bin/sh
-node "${relLinterPath}" --fix --add --mode hook
+node "${relLinterPath}" --fix --mode hook
 `;
   if (fs13.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
@@ -6633,7 +6636,7 @@ var upgrade = () => {
       console.log("Installed via a package manager, but it could not be identified automatically.");
       console.log("Run one set to upgrade:");
       console.log();
-      console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
+      console.log(`  yarn global add "${YARN_INSTALL_SPEC} "`);
       console.log();
       console.log("  npm uninstall -g @skyrim-multiplayer/linter");
       console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
@@ -6691,7 +6694,6 @@ var printHelp = () => {
   lines.push("  --upgrade             Upgrade to the latest version");
   lines.push("");
   lines.push("OPTIONS:");
-  lines.push("  --add                 Stage fixed files with git add (requires --fix)");
   lines.push("  --verbose             Print [PASS] lines (hidden by default)");
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
   lines.push("  --no-download         Do not download tools if missing");
@@ -6838,7 +6840,6 @@ export class ${className} extends BaseCheck {
   }
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
-  const shouldAdd = args.includes("--add");
   const verbose = args.includes("--verbose");
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
@@ -6846,10 +6847,6 @@ export class ${className} extends BaseCheck {
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
-    process.exit(1);
-  }
-  if (!shouldFix && shouldAdd) {
-    console.error("--add makes no sense without --fix");
     process.exit(1);
   }
   try {
@@ -6867,7 +6864,7 @@ export class ${className} extends BaseCheck {
     const files = await fileSource.resolve();
     console.log(`${fileSource.name}: ${files.length} file(s)`);
     const startTime = Date.now();
-    await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
+    const runResult = await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
     const elapsedMs = Date.now() - startTime;
     const minutes = Math.floor(elapsedMs / 6e4);
     const seconds = (elapsedMs % 6e4 / 1e3).toFixed(2);
@@ -6880,13 +6877,10 @@ export class ${className} extends BaseCheck {
     if (!shouldFix) {
       process.exit(0);
     }
-    if (shouldAdd) {
-      files.forEach(
+    if (mode === "hook") {
+      const allFiles = [...files, ...runResult.extraFiles || []];
+      allFiles.forEach(
         (file) => ensureCleanExit(spawnSync3("git", ["add", file], { stdio: "inherit" }))
-      );
-    } else {
-      console.log(
-        "Files were not staged (use --add to stage automatically)."
       );
     }
   } catch (err) {

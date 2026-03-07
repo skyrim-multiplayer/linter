@@ -112,7 +112,7 @@ export class CodegenCheck extends BaseCheck {
     } catch (err) {
       return { status: "error", output: `command failed: ${err}` };
     }
-    return { status: "fixed" };
+    return { status: "fixed", extraFiles: [this.#absOutput] };
   }
 
   async #runCommand() {
