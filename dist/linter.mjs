@@ -1674,7 +1674,7 @@ var AiPromptCheck = class extends BaseCheck {
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     if (!options.prompt) throw new Error("AiPromptCheck requires options.prompt");
-    this.#prompt = options.prompt;
+    this.#prompt = Array.isArray(options.prompt) ? options.prompt.join("\n") : options.prompt;
     this.#model = options.model || void 0;
   }
   get name() {
@@ -6512,7 +6512,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "44c4e9a" : "unknown";
+var LINTER_COMMIT = true ? "a89a56e" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

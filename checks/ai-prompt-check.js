@@ -28,7 +28,7 @@ export class AiPromptCheck extends BaseCheck {
     super(repoRoot, options);
     if (!options.prompt) throw new Error("AiPromptCheck requires options.prompt");
 
-    this.#prompt = options.prompt;
+    this.#prompt = Array.isArray(options.prompt) ? options.prompt.join("\n") : options.prompt;
     this.#model = options.model || undefined;
   }
 
