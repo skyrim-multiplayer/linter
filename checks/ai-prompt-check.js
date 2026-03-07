@@ -74,7 +74,7 @@ export class AiPromptCheck extends BaseCheck {
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#callClaude(prompt, { print: true });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -112,7 +112,7 @@ export class AiPromptCheck extends BaseCheck {
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#callClaude(prompt, { print: false });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -132,9 +132,17 @@ export class AiPromptCheck extends BaseCheck {
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
 
-  #callClaude(prompt) {
+  /**
+   * @param {string} prompt
+   * @param {{ print?: boolean }} opts  — print: true for lint (text-only),
+   *                                      false for fix (agentic, can edit files)
+   */
+  #callClaude(prompt, { print = true } = {}) {
     return new Promise((resolve, reject) => {
-      const args = ["--dangerously-skip-permissions", "--print"];
+      const args = ["--dangerously-skip-permissions"];
+      if (print) {
+        args.push("--print");
+      }
       if (this.#model) {
         args.push("--model", this.#model);
       }
@@ -160,7 +168,10 @@ export class AiPromptCheck extends BaseCheck {
 
       proc.on("close", (code) => {
         if (code !== 0) {
-          reject(new Error(stderr || `claude exited with code ${code}`));
+          const parts = [`claude exited with code ${code}`];
+          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+          reject(new Error(parts.join("\n")));
           return;
         }
         resolve(stdout.trim());

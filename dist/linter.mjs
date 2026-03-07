@@ -1727,7 +1727,7 @@ ${content}
 Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#callClaude(prompt, { print: true });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1757,7 +1757,7 @@ Instruction: ${instruction}
 Read the file, apply the fix directly by editing it, then respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation" }. If no changes are needed set changed to false.`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#callClaude(prompt, { print: false });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1773,9 +1773,17 @@ Read the file, apply the fix directly by editing it, then respond with ONLY a JS
     }
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
-  #callClaude(prompt) {
+  /**
+   * @param {string} prompt
+   * @param {{ print?: boolean }} opts  — print: true for lint (text-only),
+   *                                      false for fix (agentic, can edit files)
+   */
+  #callClaude(prompt, { print = true } = {}) {
     return new Promise((resolve, reject) => {
-      const args = ["--dangerously-skip-permissions", "--print"];
+      const args = ["--dangerously-skip-permissions"];
+      if (print) {
+        args.push("--print");
+      }
       if (this.#model) {
         args.push("--model", this.#model);
       }
@@ -1800,7 +1808,10 @@ Read the file, apply the fix directly by editing it, then respond with ONLY a JS
       });
       proc.on("close", (code) => {
         if (code !== 0) {
-          reject(new Error(stderr || `claude exited with code ${code}`));
+          const parts = [`claude exited with code ${code}`];
+          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+          reject(new Error(parts.join("\n")));
           return;
         }
         resolve(stdout.trim());
@@ -6541,7 +6552,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "4a8a27e" : "unknown";
+var LINTER_COMMIT = true ? "d23a6f2" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
