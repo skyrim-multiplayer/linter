@@ -1667,28 +1667,20 @@ var CodegenCheck = class extends BaseCheck {
 // checks/ai-prompt-check.js
 import { promises as fs10 } from "fs";
 import path7 from "path";
+import { spawn } from "child_process";
 var AiPromptCheck = class extends BaseCheck {
   #prompt;
   #model;
-  #apiUrl;
-  #envVar;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     if (!options.prompt) throw new Error("AiPromptCheck requires options.prompt");
     this.#prompt = options.prompt;
-    this.#model = options.model || "gpt-4o-mini";
-    this.#apiUrl = options.apiUrl || "https://api.openai.com/v1/chat/completions";
-    this.#envVar = options.envVar || "OPENAI_API_KEY";
+    this.#model = options.model || void 0;
   }
   get name() {
     return `AI Prompt (${this.#prompt.slice(0, 50)}${this.#prompt.length > 50 ? "\u2026" : ""})`;
   }
   checkDeps() {
-    const key = process.env[this.#envVar];
-    if (!key) {
-      console.log(`  \u26A0 ${this.#envVar} not set \u2014 AI prompt check will be skipped`);
-      return false;
-    }
     return true;
   }
   async lint(file, _deps) {
@@ -1699,24 +1691,27 @@ var AiPromptCheck = class extends BaseCheck {
       return { status: "error", output: `cannot read file: ${err.message}` };
     }
     const relFile = path7.relative(this.repoRoot, file);
-    const systemMessage = 'You are a code review assistant integrated into a linter. You will receive a file and an instruction describing what to check. Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }';
-    const userMessage = `File: ${relFile}
+    const prompt = `You are a code review assistant integrated into a linter.
+File: ${relFile}
 Instruction: ${this.#prompt}
 
 --- file content ---
 ${content}
---- end of file ---`;
+--- end of file ---
+
+Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
     let reply;
     try {
-      reply = await this.#callApi(systemMessage, userMessage);
+      reply = await this.#callClaude(prompt);
     } catch (err) {
-      return { status: "error", output: `AI API error: ${err.message}` };
+      return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
     let verdict;
     try {
-      verdict = JSON.parse(reply);
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      verdict = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `AI returned invalid JSON: ${reply}` };
+      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
     if (verdict.pass) {
       return { status: "pass" };
@@ -1724,71 +1719,72 @@ ${content}
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
   }
   async fix(file, _deps) {
-    let content;
-    try {
-      content = await fs10.readFile(file, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot read file: ${err.message}` };
-    }
+    const absFile = path7.resolve(file);
     const relFile = path7.relative(this.repoRoot, file);
-    const systemMessage = 'You are a code fixing assistant integrated into a linter. You will receive a file and an instruction describing what to fix. Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "content": "the full corrected file content", "reason": "short explanation" }. If no changes are needed set changed to false and omit content.';
-    const userMessage = `File: ${relFile}
+    const prompt = `You are a code fixing assistant integrated into a linter.
+The file to fix is: ${absFile}
 Instruction: ${this.#prompt}
 
---- file content ---
-${content}
---- end of file ---`;
+Read the file, apply the fix directly by editing it, then respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation" }. If no changes are needed set changed to false.`;
     let reply;
     try {
-      reply = await this.#callApi(systemMessage, userMessage);
+      reply = await this.#callClaude(prompt);
     } catch (err) {
-      return { status: "error", output: `AI API error: ${err.message}` };
+      return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
     let result;
     try {
-      result = JSON.parse(reply);
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `AI returned invalid JSON: ${reply}` };
+      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
     if (!result.changed) {
       return { status: "pass" };
     }
-    try {
-      await fs10.writeFile(file, result.content, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot write file: ${err.message}` };
-    }
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
-  async #callApi(systemMessage, userMessage) {
-    const apiKey = process.env[this.#envVar];
-    const response = await fetch(this.#apiUrl, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({
-        model: this.#model,
-        messages: [
-          { role: "system", content: systemMessage },
-          { role: "user", content: userMessage }
-        ],
-        temperature: 0
-      })
+  #callClaude(prompt) {
+    return new Promise((resolve, reject) => {
+      const args = ["--dangerously-skip-permissions", "--print"];
+      if (this.#model) {
+        args.push("--model", this.#model);
+      }
+      const proc = spawn("claude", args, {
+        cwd: this.repoRoot,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (data) => {
+        stdout += data;
+      });
+      proc.stderr.on("data", (data) => {
+        stderr += data;
+      });
+      proc.on("error", (err) => {
+        if (err.code === "ENOENT") {
+          reject(new Error("claude CLI not found on PATH"));
+        } else {
+          reject(err);
+        }
+      });
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          reject(new Error(stderr || `claude exited with code ${code}`));
+          return;
+        }
+        resolve(stdout.trim());
+      });
+      proc.stdin.write(prompt);
+      proc.stdin.end();
     });
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HTTP ${response.status}: ${body}`);
-    }
-    const data = await response.json();
-    return data.choices[0].message.content.trim();
   }
   static getHelp() {
     return {
       name: "AiPromptCheck",
-      description: "Sends file content to an OpenAI-compatible AI with a user-defined prompt. Lint asks the AI to evaluate pass/fail. Fix asks the AI to return corrected content.",
-      options: "prompt \u2014 instruction for the AI (required); model \u2014 AI model (default: gpt-4o-mini); apiUrl \u2014 chat completions endpoint (default: OpenAI); envVar \u2014 env var for API key (default: OPENAI_API_KEY)"
+      description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix lets Claude edit the file directly.",
+      options: "prompt \u2014 instruction for the AI (required); model \u2014 Claude model (optional, uses CLI default)"
     };
   }
 };
@@ -1802,7 +1798,7 @@ var import_file_exists = __toESM(require_dist(), 1);
 var import_debug = __toESM(require_src(), 1);
 var import_promise_deferred = __toESM(require_dist2(), 1);
 var import_promise_deferred2 = __toESM(require_dist2(), 1);
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { EventEmitter } from "node:events";
 var __defProp2 = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -3212,7 +3208,7 @@ var init_git_executor_chain = __esm({
                 rejection = reason || rejection;
               }
             }));
-            const spawned = spawn(command, args, spawnOptions);
+            const spawned = spawn2(command, args, spawnOptions);
             spawned.stdout.on(
               "data",
               onDataReceived(stdOut, "stdOut", logger, outputLogger.step("stdOut"))
@@ -6516,7 +6512,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "a775214" : "unknown";
+var LINTER_COMMIT = true ? "44c4e9a" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
