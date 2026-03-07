@@ -1492,7 +1492,8 @@ var PairedFilesCheck = class extends BaseCheck {
     }
     this.#absDirs = dirs.map((d) => ({
       abs: path5.resolve(repoRoot, d.path),
-      ext: d.ext
+      ext: d.ext,
+      template: d.template || null
     }));
     this.#exclude = new Set((options.exclude || []).map((f) => f.toLowerCase()));
   }
@@ -1526,13 +1527,40 @@ var PairedFilesCheck = class extends BaseCheck {
     return { status: "pass" };
   }
   async fix(file) {
-    return this.lint(file);
+    const ext = path5.extname(file);
+    const baseName = path5.basename(file, ext);
+    const ownDir = this.#absDirs.find((d) => file.startsWith(d.abs + path5.sep));
+    const pairDir = this.#absDirs.find((d) => d !== ownDir);
+    const expected = `${baseName}${pairDir.ext}`;
+    const pairPath = path5.join(pairDir.abs, expected);
+    let pairFiles;
+    try {
+      pairFiles = await fs8.readdir(pairDir.abs);
+    } catch (err) {
+      return { status: "error", output: `cannot read pair directory ${pairDir.abs}: ${err.message}` };
+    }
+    const found = pairFiles.find(
+      (c) => c.toLowerCase() === expected.toLowerCase()
+    );
+    if (found) {
+      return { status: "pass" };
+    }
+    if (!pairDir.template) {
+      return { status: "fail", output: `pair file not found (expected ${expected} in ${pairDir.abs})` };
+    }
+    const content = pairDir.template.replaceAll("{{basename}}", baseName);
+    try {
+      await fs8.writeFile(pairPath, content);
+    } catch (err) {
+      return { status: "error", output: `failed to create ${pairPath}: ${err.message}` };
+    }
+    return { status: "fixed", output: `created ${pairPath}` };
   }
   static getHelp() {
     return {
       name: "PairedFilesCheck",
-      description: "Ensures matching files exist across two directories (e.g. src/*.cpp \u2194 include/*.h). Lint-only, no auto-fix.",
-      options: 'dirs \u2014 array of 2 objects { "path": "...", "ext": "..." }; exclude \u2014 filenames to skip'
+      description: "Ensures matching files exist across two directories (e.g. src/*.cpp \u2194 include/*.h). Can auto-create missing files when a template is provided.",
+      options: 'dirs \u2014 array of 2 objects { "path": "...", "ext": "...", "template?": "..." } ({{basename}} is replaced); exclude \u2014 filenames to skip'
     };
   }
 };
@@ -6488,7 +6516,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "0b5f6d5" : "unknown";
+var LINTER_COMMIT = true ? "a775214" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
