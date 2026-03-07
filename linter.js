@@ -394,7 +394,7 @@ const upgrade = () => {
       console.log("Installed via a package manager, but it could not be identified automatically.");
       console.log("Run one set to upgrade:");
       console.log();
-      console.log(`  yarn global add "${YARN_INSTALL_SPEC}"`);
+      console.log(`  yarn global add "${YARN_INSTALL_SPEC} "`);
       console.log();
       console.log("  npm uninstall -g @skyrim-multiplayer/linter");
       console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
