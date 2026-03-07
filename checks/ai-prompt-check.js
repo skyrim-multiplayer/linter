@@ -22,18 +22,28 @@ import { BaseCheck } from "./base-check.js";
  */
 export class AiPromptCheck extends BaseCheck {
   #prompt;
+  #lintPrompt;
+  #fixPrompt;
   #model;
 
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
-    if (!options.prompt) throw new Error("AiPromptCheck requires options.prompt");
+    const coerce = (v) => (v == null ? undefined : Array.isArray(v) ? v.join("\n") : v);
 
-    this.#prompt = Array.isArray(options.prompt) ? options.prompt.join("\n") : options.prompt;
+    this.#prompt = coerce(options.prompt);
+    this.#lintPrompt = coerce(options.lintPrompt);
+    this.#fixPrompt = coerce(options.fixPrompt);
+
+    if (!this.#prompt && !this.#lintPrompt && !this.#fixPrompt) {
+      throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
+    }
+
     this.#model = options.model || undefined;
   }
 
   get name() {
-    return `AI Prompt (${this.#prompt.slice(0, 50)}${this.#prompt.length > 50 ? "…" : ""})`;
+    const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
+    return `AI Prompt (${label.slice(0, 50)}${label.length > 50 ? "…" : ""})`;
   }
 
   checkDeps() {
@@ -49,11 +59,15 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     const relFile = path.relative(this.repoRoot, file);
+    const instruction = this.#lintPrompt || this.#prompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
+    }
 
     const prompt =
       `You are a code review assistant integrated into a linter.\n` +
       `File: ${relFile}\n` +
-      `Instruction: ${this.#prompt}\n\n` +
+      `Instruction: ${instruction}\n\n` +
       `--- file content ---\n${content}\n--- end of file ---\n\n` +
       `Respond with ONLY a JSON object (no markdown fences): ` +
       `{ "pass": true/false, "reason": "short explanation" }`;
@@ -82,11 +96,15 @@ export class AiPromptCheck extends BaseCheck {
   async fix(file, _deps) {
     const absFile = path.resolve(file);
     const relFile = path.relative(this.repoRoot, file);
+    const instruction = this.#fixPrompt || this.#prompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
+    }
 
     const prompt =
       `You are a code fixing assistant integrated into a linter.\n` +
       `The file to fix is: ${absFile}\n` +
-      `Instruction: ${this.#prompt}\n\n` +
+      `Instruction: ${instruction}\n\n` +
       `Read the file, apply the fix directly by editing it, then respond ` +
       `with ONLY a JSON object (no markdown fences): ` +
       `{ "changed": true/false, "reason": "short explanation" }. ` +
@@ -160,7 +178,9 @@ export class AiPromptCheck extends BaseCheck {
         "Invokes the Claude CLI with a user-defined prompt. " +
         "Lint asks Claude to evaluate pass/fail. Fix lets Claude edit the file directly.",
       options:
-        "prompt — instruction for the AI (required); " +
+        "prompt — shared instruction for the AI (string or array); " +
+        "lintPrompt — lint-specific instruction (overrides prompt); " +
+        "fixPrompt — fix-specific instruction (overrides prompt); " +
         "model — Claude model (optional, uses CLI default)",
     };
   }

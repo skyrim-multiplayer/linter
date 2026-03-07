@@ -1670,15 +1670,23 @@ import path7 from "path";
 import { spawn } from "child_process";
 var AiPromptCheck = class extends BaseCheck {
   #prompt;
+  #lintPrompt;
+  #fixPrompt;
   #model;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
-    if (!options.prompt) throw new Error("AiPromptCheck requires options.prompt");
-    this.#prompt = Array.isArray(options.prompt) ? options.prompt.join("\n") : options.prompt;
+    const coerce = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
+    this.#prompt = coerce(options.prompt);
+    this.#lintPrompt = coerce(options.lintPrompt);
+    this.#fixPrompt = coerce(options.fixPrompt);
+    if (!this.#prompt && !this.#lintPrompt && !this.#fixPrompt) {
+      throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
+    }
     this.#model = options.model || void 0;
   }
   get name() {
-    return `AI Prompt (${this.#prompt.slice(0, 50)}${this.#prompt.length > 50 ? "\u2026" : ""})`;
+    const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
+    return `AI Prompt (${label.slice(0, 50)}${label.length > 50 ? "\u2026" : ""})`;
   }
   checkDeps() {
     return true;
@@ -1691,9 +1699,13 @@ var AiPromptCheck = class extends BaseCheck {
       return { status: "error", output: `cannot read file: ${err.message}` };
     }
     const relFile = path7.relative(this.repoRoot, file);
+    const instruction = this.#lintPrompt || this.#prompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
+    }
     const prompt = `You are a code review assistant integrated into a linter.
 File: ${relFile}
-Instruction: ${this.#prompt}
+Instruction: ${instruction}
 
 --- file content ---
 ${content}
@@ -1721,9 +1733,13 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
   async fix(file, _deps) {
     const absFile = path7.resolve(file);
     const relFile = path7.relative(this.repoRoot, file);
+    const instruction = this.#fixPrompt || this.#prompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
+    }
     const prompt = `You are a code fixing assistant integrated into a linter.
 The file to fix is: ${absFile}
-Instruction: ${this.#prompt}
+Instruction: ${instruction}
 
 Read the file, apply the fix directly by editing it, then respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation" }. If no changes are needed set changed to false.`;
     let reply;
@@ -1784,7 +1800,7 @@ Read the file, apply the fix directly by editing it, then respond with ONLY a JS
     return {
       name: "AiPromptCheck",
       description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix lets Claude edit the file directly.",
-      options: "prompt \u2014 instruction for the AI (required); model \u2014 Claude model (optional, uses CLI default)"
+      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); model \u2014 Claude model (optional, uses CLI default)"
     };
   }
 };
@@ -6512,7 +6528,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "a89a56e" : "unknown";
+var LINTER_COMMIT = true ? "3a0717f" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
