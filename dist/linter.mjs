@@ -965,11 +965,13 @@ import path from "path";
 import fs from "fs/promises";
 var BaseCheck = class {
   #extensions;
+  #includePaths;
   #excludePaths;
   #textOnly;
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
     this.#extensions = (options.extensions || []).map((e) => e.toLowerCase());
+    this.#includePaths = options.includePaths || [];
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
   }
@@ -995,6 +997,9 @@ var BaseCheck = class {
    * @returns {Promise<boolean>}
    */
   async appliesTo(file) {
+    if (this.#includePaths.length > 0) {
+      if (!this.#includePaths.some((p) => file.includes(p))) return false;
+    }
     for (const p of this.#excludePaths) {
       if (file.includes(p)) return false;
     }
@@ -1054,7 +1059,7 @@ var BaseCheck = class {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, excludePaths, textOnly" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly" };
   }
 };
 
@@ -6528,7 +6533,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "3a0717f" : "unknown";
+var LINTER_COMMIT = true ? "4f4415e" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

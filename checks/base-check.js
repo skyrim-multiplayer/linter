@@ -17,6 +17,7 @@ import fs from "fs/promises";
  *
  * appliesTo() is provided by BaseCheck using options from config:
  *   options.extensions   - array of extensions to include (e.g. [".cpp", ".h"])
+ *   options.includePaths - array of path substrings; file must match at least one (if set)
  *   options.excludePaths - array of path substrings to skip
  *   options.textOnly     - if true, skip binary files (default: false)
  *
@@ -27,12 +28,14 @@ import fs from "fs/promises";
  */
 export class BaseCheck {
   #extensions;
+  #includePaths;
   #excludePaths;
   #textOnly;
 
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
     this.#extensions = (options.extensions || []).map((e) => e.toLowerCase());
+    this.#includePaths = options.includePaths || [];
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
   }
@@ -61,6 +64,11 @@ export class BaseCheck {
    * @returns {Promise<boolean>}
    */
   async appliesTo(file) {
+    // includePaths check (if set, file must match at least one)
+    if (this.#includePaths.length > 0) {
+      if (!this.#includePaths.some((p) => file.includes(p))) return false;
+    }
+
     // excludePaths check
     for (const p of this.#excludePaths) {
       if (file.includes(p)) return false;
@@ -130,6 +138,6 @@ export class BaseCheck {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, excludePaths, textOnly" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly" };
   }
 }
