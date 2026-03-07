@@ -332,7 +332,7 @@ const installHook = () => {
 
 /**
  * Detect how the linter was installed.
- * @returns {"npm" | "yarn" | "package-manager" | "source" | "single-file"}
+ * @returns {"npm" | "yarn" | "package-manager" | "single-file"}
  */
 const detectInstallMethod = () => {
   const sep = path.sep;
@@ -353,18 +353,7 @@ const detectInstallMethod = () => {
   if (__filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "package-manager";
   }
-  let dir = __dirname;
-  while (dir !== path.dirname(dir)) {
-    const pkg = path.join(dir, "package.json");
-    const git = path.join(dir, ".git");
-    if (fs.existsSync(pkg) && fs.existsSync(git)) {
-      try {
-        const json = JSON.parse(fs.readFileSync(pkg, "utf-8"));
-        if (json.name === "@skyrim-multiplayer/linter") return "source";
-      } catch {}
-    }
-    dir = path.dirname(dir);
-  }
+
   return "single-file";
 };
 
@@ -409,13 +398,6 @@ const upgrade = () => {
       console.log();
       console.log("  npm uninstall -g @skyrim-multiplayer/linter");
       console.log(`  npm install -g "${YARN_INSTALL_SPEC}"`);
-      console.log();
-      break;
-    }
-    case "source": {
-      console.log("Running from source checkout. Run:");
-      console.log();
-      console.log("  git pull && yarn build");
       console.log();
       break;
     }

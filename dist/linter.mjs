@@ -694,10 +694,10 @@ var require_src2 = __commonJS({
     var fs_1 = __require("fs");
     var debug_1 = __importDefault(require_src());
     var log = debug_1.default("@kwsites/file-exists");
-    function check(path10, isFile, isDirectory) {
-      log(`checking %s`, path10);
+    function check(path11, isFile, isDirectory) {
+      log(`checking %s`, path11);
       try {
-        const stat = fs_1.statSync(path10);
+        const stat = fs_1.statSync(path11);
         if (stat.isFile() && isFile) {
           log(`[OK] path represents a file`);
           return true;
@@ -717,8 +717,8 @@ var require_src2 = __commonJS({
         throw e;
       }
     }
-    function exists2(path10, type = exports.READABLE) {
-      return check(path10, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
+    function exists2(path11, type = exports.READABLE) {
+      return check(path11, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
     }
     exports.exists = exists2;
     exports.FILE = 1;
@@ -782,8 +782,8 @@ var require_dist2 = __commonJS({
 });
 
 // linter.js
-import fs12 from "fs";
-import path9 from "path";
+import fs13 from "fs";
+import path10 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
 
@@ -1537,9 +1537,108 @@ var PairedFilesCheck = class extends BaseCheck {
   }
 };
 
-// file-sources/all-files-source.js
-import fs9 from "fs";
+// checks/codegen-check.js
+import { promises as fs9 } from "fs";
+import { execFile as execFile4 } from "child_process";
+import { promisify as promisify3 } from "util";
 import path6 from "path";
+var execFileAsync3 = promisify3(execFile4);
+var CodegenCheck = class extends BaseCheck {
+  #command;
+  #inputFile;
+  #outputFile;
+  #absInput;
+  #absOutput;
+  constructor(repoRoot, options = {}) {
+    super(repoRoot, options);
+    if (!options.command) throw new Error("CodegenCheck requires options.command");
+    if (!options.inputFile) throw new Error("CodegenCheck requires options.inputFile");
+    if (!options.outputFile) throw new Error("CodegenCheck requires options.outputFile");
+    this.#command = options.command;
+    this.#inputFile = options.inputFile;
+    this.#outputFile = options.outputFile;
+    this.#absInput = path6.resolve(repoRoot, options.inputFile);
+    this.#absOutput = path6.resolve(repoRoot, options.outputFile);
+  }
+  get name() {
+    return `Codegen (${this.#inputFile} \u2192 ${this.#outputFile})`;
+  }
+  /**
+   * Only applies to the input file — the check triggers when the source changes.
+   */
+  async appliesTo(file) {
+    if (!await super.appliesTo(file)) return false;
+    return path6.resolve(file) === this.#absInput;
+  }
+  async lint(file, _deps) {
+    let original;
+    try {
+      original = await fs9.readFile(this.#absOutput);
+    } catch (err) {
+      if (err.code === "ENOENT") {
+        original = null;
+      } else {
+        return { status: "error", output: `cannot read output file: ${err.message}` };
+      }
+    }
+    try {
+      await this.#runCommand();
+    } catch (err) {
+      await this.#restore(original);
+      return { status: "error", output: `command failed: ${err}` };
+    }
+    let generated;
+    try {
+      generated = await fs9.readFile(this.#absOutput);
+    } catch (err) {
+      await this.#restore(original);
+      return { status: "error", output: `cannot read generated output: ${err.message}` };
+    }
+    await this.#restore(original);
+    if (original === null) {
+      return { status: "fail", output: `output file ${this.#outputFile} did not exist before codegen \u2014 file is stale` };
+    }
+    if (!original.equals(generated)) {
+      return { status: "fail", output: `output file ${this.#outputFile} is stale \u2014 re-run codegen to update` };
+    }
+    return { status: "pass" };
+  }
+  async fix(file, _deps) {
+    try {
+      await this.#runCommand();
+    } catch (err) {
+      return { status: "error", output: `command failed: ${err}` };
+    }
+    return { status: "fixed" };
+  }
+  async #runCommand() {
+    const parts = this.#command.split(/\s+/);
+    const cmd = parts[0];
+    const args = parts.slice(1);
+    await execFileAsync3(cmd, args, { cwd: this.repoRoot });
+  }
+  async #restore(original) {
+    if (original === null) {
+      try {
+        await fs9.unlink(this.#absOutput);
+      } catch {
+      }
+    } else {
+      await fs9.writeFile(this.#absOutput, original);
+    }
+  }
+  static getHelp() {
+    return {
+      name: "CodegenCheck",
+      description: "Verifies generated output files are up-to-date. Lint reads output into RAM, runs generator, compares, and rolls back. Fix just runs the generator.",
+      options: "command \u2014 generator command to run; inputFile \u2014 source file path (relative to repo root); outputFile \u2014 generated file path (relative to repo root)"
+    };
+  }
+};
+
+// file-sources/all-files-source.js
+import fs10 from "fs";
+import path7 from "path";
 
 // node_modules/simple-git/dist/esm/index.js
 var import_file_exists = __toESM(require_dist(), 1);
@@ -1613,8 +1712,8 @@ function pathspec(...paths) {
   cache.set(key, paths);
   return key;
 }
-function isPathSpec(path10) {
-  return path10 instanceof String && cache.has(path10);
+function isPathSpec(path11) {
+  return path11 instanceof String && cache.has(path11);
 }
 function toPaths(pathSpec) {
   return cache.get(pathSpec) || [];
@@ -1700,8 +1799,8 @@ function toLinesWithContent(input = "", trimmed2 = true, separator = "\n") {
 function forEachLineWithContent(input, callback) {
   return toLinesWithContent(input, true).map((line) => callback(line));
 }
-function folderExists(path10) {
-  return (0, import_file_exists.exists)(path10, import_file_exists.FOLDER);
+function folderExists(path11) {
+  return (0, import_file_exists.exists)(path11, import_file_exists.FOLDER);
 }
 function append(target, item) {
   if (Array.isArray(target)) {
@@ -2092,8 +2191,8 @@ function checkIsRepoRootTask() {
     commands,
     format: "utf-8",
     onError,
-    parser(path10) {
-      return /^\.(git)?$/.test(path10.trim());
+    parser(path11) {
+      return /^\.(git)?$/.test(path11.trim());
     }
   };
 }
@@ -2527,11 +2626,11 @@ function parseGrep(grep) {
   const paths = /* @__PURE__ */ new Set();
   const results = {};
   forEachLineWithContent(grep, (input) => {
-    const [path10, line, preview] = input.split(NULL);
-    paths.add(path10);
-    (results[path10] = results[path10] || []).push({
+    const [path11, line, preview] = input.split(NULL);
+    paths.add(path11);
+    (results[path11] = results[path11] || []).push({
       line: asNumber(line),
-      path: path10,
+      path: path11,
       preview
     });
   });
@@ -3294,14 +3393,14 @@ var init_hash_object = __esm({
     init_task();
   }
 });
-function parseInit(bare, path10, text) {
+function parseInit(bare, path11, text) {
   const response = String(text).trim();
   let result;
   if (result = initResponseRegex.exec(response)) {
-    return new InitSummary(bare, path10, false, result[1]);
+    return new InitSummary(bare, path11, false, result[1]);
   }
   if (result = reInitResponseRegex.exec(response)) {
-    return new InitSummary(bare, path10, true, result[1]);
+    return new InitSummary(bare, path11, true, result[1]);
   }
   let gitDir = "";
   const tokens = response.split(" ");
@@ -3312,7 +3411,7 @@ function parseInit(bare, path10, text) {
       break;
     }
   }
-  return new InitSummary(bare, path10, /^re/i.test(response), gitDir);
+  return new InitSummary(bare, path11, /^re/i.test(response), gitDir);
 }
 var InitSummary;
 var initResponseRegex;
@@ -3321,9 +3420,9 @@ var init_InitSummary = __esm({
   "src/lib/responses/InitSummary.ts"() {
     "use strict";
     InitSummary = class {
-      constructor(bare, path10, existing, gitDir) {
+      constructor(bare, path11, existing, gitDir) {
         this.bare = bare;
-        this.path = path10;
+        this.path = path11;
         this.existing = existing;
         this.gitDir = gitDir;
       }
@@ -3335,7 +3434,7 @@ var init_InitSummary = __esm({
 function hasBareCommand(command) {
   return command.includes(bareCommand);
 }
-function initTask(bare = false, path10, customArgs) {
+function initTask(bare = false, path11, customArgs) {
   const commands = ["init", ...customArgs];
   if (bare && !hasBareCommand(commands)) {
     commands.splice(1, 0, bareCommand);
@@ -3344,7 +3443,7 @@ function initTask(bare = false, path10, customArgs) {
     commands,
     format: "utf-8",
     parser(text) {
-      return parseInit(commands.includes("--bare"), path10, text);
+      return parseInit(commands.includes("--bare"), path11, text);
     }
   };
 }
@@ -4155,12 +4254,12 @@ var init_FileStatusSummary = __esm({
     "use strict";
     fromPathRegex = /^(.+)\0(.+)$/;
     FileStatusSummary = class {
-      constructor(path10, index, working_dir) {
-        this.path = path10;
+      constructor(path11, index, working_dir) {
+        this.path = path11;
         this.index = index;
         this.working_dir = working_dir;
         if (index === "R" || working_dir === "R") {
-          const detail = fromPathRegex.exec(path10) || [null, path10, path10];
+          const detail = fromPathRegex.exec(path11) || [null, path11, path11];
           this.from = detail[2] || "";
           this.path = detail[1] || "";
         }
@@ -4191,14 +4290,14 @@ function splitLine(result, lineStr) {
     default:
       return;
   }
-  function data(index, workingDir, path10) {
+  function data(index, workingDir, path11) {
     const raw = `${index}${workingDir}`;
     const handler = parsers6.get(raw);
     if (handler) {
-      handler(result, path10);
+      handler(result, path11);
     }
     if (raw !== "##" && raw !== "!!") {
-      result.files.push(new FileStatusSummary(path10, index, workingDir));
+      result.files.push(new FileStatusSummary(path11, index, workingDir));
     }
   }
 }
@@ -4510,9 +4609,9 @@ var init_simple_git_api = __esm({
           next
         );
       }
-      hashObject(path10, write) {
+      hashObject(path11, write) {
         return this._runTask(
-          hashObjectTask(path10, write === true),
+          hashObjectTask(path11, write === true),
           trailingFunctionArgument(arguments)
         );
       }
@@ -5166,8 +5265,8 @@ __export(sub_module_exports, {
   subModuleTask: () => subModuleTask,
   updateSubModuleTask: () => updateSubModuleTask
 });
-function addSubModuleTask(repo, path10) {
-  return subModuleTask(["add", repo, path10]);
+function addSubModuleTask(repo, path11) {
+  return subModuleTask(["add", repo, path11]);
 }
 function initSubModuleTask(customArgs) {
   return subModuleTask(["init", ...customArgs]);
@@ -5497,8 +5596,8 @@ var require_git = __commonJS2({
       }
       return this._runTask(straightThroughStringTask2(command, this._trimmed), next);
     };
-    Git2.prototype.submoduleAdd = function(repo, path10, then) {
-      return this._runTask(addSubModuleTask2(repo, path10), trailingFunctionArgument2(arguments));
+    Git2.prototype.submoduleAdd = function(repo, path11, then) {
+      return this._runTask(addSubModuleTask2(repo, path11), trailingFunctionArgument2(arguments));
     };
     Git2.prototype.submoduleUpdate = function(args, then) {
       return this._runTask(
@@ -6130,11 +6229,11 @@ var AllFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path6.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path7.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs9.promises.access(filePath, fs9.constants.F_OK);
+          await fs10.promises.access(filePath, fs10.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6153,8 +6252,8 @@ var AllFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/staged-files-source.js
-import fs10 from "fs";
-import path7 from "path";
+import fs11 from "fs";
+import path8 from "path";
 var StagedFilesSource = class extends BaseFileSource {
   get name() {
     return "Staged files";
@@ -6162,11 +6261,11 @@ var StagedFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", "--cached"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path7.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path8.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs10.promises.access(filePath, fs10.constants.F_OK);
+          await fs11.promises.access(filePath, fs11.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6185,8 +6284,8 @@ var StagedFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/diff-base-source.js
-import fs11 from "fs";
-import path8 from "path";
+import fs12 from "fs";
+import path9 from "path";
 var DiffBaseSource = class extends BaseFileSource {
   get name() {
     return "Diff vs base";
@@ -6196,11 +6295,11 @@ var DiffBaseSource = class extends BaseFileSource {
     console.log(`DiffBaseSource: diffing against ${baseRef}`);
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", baseRef]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path8.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path9.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs11.promises.access(filePath, fs11.constants.F_OK);
+          await fs12.promises.access(filePath, fs12.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6242,7 +6341,8 @@ var builtinChecks = {
   CrlfCheck,
   LinelintCheck,
   ClangFormatCheck,
-  PairedFilesCheck
+  PairedFilesCheck,
+  CodegenCheck
 };
 var builtinFileSources = {
   AllFilesSource,
@@ -6256,9 +6356,9 @@ var builtinRegistry = {
 
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path9.dirname(__filename);
+var __dirname = path10.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "8dc9f71" : "unknown";
+var LINTER_COMMIT = true ? "0784d66" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6291,9 +6391,9 @@ var resolveClass = async (entry) => {
   return Cls;
 };
 var loadConfig = async (mode) => {
-  const configPath = path9.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(await fs12.promises.readFile(configPath, "utf-8"));
-  const toolsDir = config.toolsDir ? path9.resolve(REPO_ROOT, config.toolsDir) : path9.join(REPO_ROOT, "tools");
+  const configPath = path10.join(REPO_ROOT, "linter-config.json");
+  const config = JSON.parse(await fs13.promises.readFile(configPath, "utf-8"));
+  const toolsDir = config.toolsDir ? path10.resolve(REPO_ROOT, config.toolsDir) : path10.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
     throw new Error(`Unknown mode "${mode}". Available: ${Object.keys(config.modes).join(", ")}`);
@@ -6313,7 +6413,7 @@ var loadConfig = async (mode) => {
   return { fileSource, checks, toolsDir };
 };
 var relPath = (file) => {
-  if (file.startsWith(REPO_ROOT + path9.sep)) {
+  if (file.startsWith(REPO_ROOT + path10.sep)) {
     return file.slice(REPO_ROOT.length + 1);
   }
   return file;
@@ -6477,23 +6577,23 @@ var installHook = () => {
     console.error("Not a git repository. Cannot install hook.");
     process.exit(1);
   }
-  const hooksDir = path9.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
-  const hookPath = path9.join(hooksDir, "pre-commit");
-  const relLinterPath = path9.relative(REPO_ROOT, __filename);
+  const hooksDir = path10.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path10.join(hooksDir, "pre-commit");
+  const relLinterPath = path10.relative(REPO_ROOT, __filename);
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --add --mode hook
 `;
-  if (fs12.existsSync(hookPath)) {
+  if (fs13.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
-    fs12.copyFileSync(hookPath, backup);
-    console.log(`Existing pre-commit hook backed up to ${path9.basename(backup)}`);
+    fs13.copyFileSync(hookPath, backup);
+    console.log(`Existing pre-commit hook backed up to ${path10.basename(backup)}`);
   }
-  fs12.mkdirSync(hooksDir, { recursive: true });
-  fs12.writeFileSync(hookPath, hookContent, { mode: 493 });
-  console.log(`Installed pre-commit hook at ${path9.relative(REPO_ROOT, hookPath)}`);
+  fs13.mkdirSync(hooksDir, { recursive: true });
+  fs13.writeFileSync(hookPath, hookContent, { mode: 493 });
+  console.log(`Installed pre-commit hook at ${path10.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
-  const sep = path9.sep;
+  const sep = path10.sep;
   if (__filename.includes(`${sep}yarn${sep}global${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "yarn";
   }
@@ -6502,19 +6602,6 @@ var detectInstallMethod = () => {
   }
   if (__filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "package-manager";
-  }
-  let dir = __dirname;
-  while (dir !== path9.dirname(dir)) {
-    const pkg = path9.join(dir, "package.json");
-    const git = path9.join(dir, ".git");
-    if (fs12.existsSync(pkg) && fs12.existsSync(git)) {
-      try {
-        const json = JSON.parse(fs12.readFileSync(pkg, "utf-8"));
-        if (json.name === "@skyrim-multiplayer/linter") return "source";
-      } catch {
-      }
-    }
-    dir = path9.dirname(dir);
   }
   return "single-file";
 };
@@ -6553,13 +6640,6 @@ var upgrade = () => {
       console.log();
       break;
     }
-    case "source": {
-      console.log("Running from source checkout. Run:");
-      console.log();
-      console.log("  git pull && yarn build");
-      console.log();
-      break;
-    }
     case "single-file": {
       const tmpPath = __filename + ".tmp";
       console.log(`Downloading latest linter from ${UPGRADE_URL}...`);
@@ -6570,20 +6650,20 @@ var upgrade = () => {
         );
       } catch {
         try {
-          fs12.unlinkSync(tmpPath);
+          fs13.unlinkSync(tmpPath);
         } catch {
         }
         console.error("Download failed.");
         process.exit(1);
       }
-      const head = fs12.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      const head = fs13.readFileSync(tmpPath, "utf-8").slice(0, 100);
       if (!head.startsWith("#!/")) {
-        fs12.unlinkSync(tmpPath);
+        fs13.unlinkSync(tmpPath);
         console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
         process.exit(1);
       }
-      fs12.renameSync(tmpPath, __filename);
-      fs12.chmodSync(__filename, 493);
+      fs13.renameSync(tmpPath, __filename);
+      fs13.chmodSync(__filename, 493);
       console.log(`Updated ${__filename}`);
       try {
         execSync(`node "${__filename}" --version`, { stdio: "inherit" });
@@ -6648,8 +6728,8 @@ var printHelp = () => {
   console.log(lines.join("\n"));
 };
 var initConfig = () => {
-  const configPath = path9.join(REPO_ROOT, "linter-config.json");
-  if (fs12.existsSync(configPath)) {
+  const configPath = path10.join(REPO_ROOT, "linter-config.json");
+  if (fs13.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
   }
@@ -6668,17 +6748,17 @@ var initConfig = () => {
     },
     checks: checkEntries
   };
-  fs12.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log(`Created ${path9.relative(REPO_ROOT, configPath)}`);
+  fs13.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log(`Created ${path10.relative(REPO_ROOT, configPath)}`);
 };
 var createCheck = (targetPath) => {
-  const absPath = path9.resolve(REPO_ROOT, targetPath);
-  if (fs12.existsSync(absPath)) {
+  const absPath = path10.resolve(REPO_ROOT, targetPath);
+  if (fs13.existsSync(absPath)) {
     console.error(`File already exists: ${absPath}`);
     process.exit(1);
   }
-  const className = path9.basename(absPath, path9.extname(absPath)).replace(/(^|[-_])(\w)/g, (_, _sep, c) => c.toUpperCase());
-  const template = `import { BaseCheck } from "${path9.relative(path9.dirname(absPath), path9.join(__dirname, "checks", "base-check.js")).replace(/\\\\/g, "/")}";
+  const className = path10.basename(absPath, path10.extname(absPath)).replace(/(^|[-_])(\w)/g, (_, _sep, c) => c.toUpperCase());
+  const template = `import { BaseCheck } from "${path10.relative(path10.dirname(absPath), path10.join(__dirname, "checks", "base-check.js")).replace(/\\\\/g, "/")}";
 
 export class ${className} extends BaseCheck {
   get name() {
@@ -6711,15 +6791,15 @@ export class ${className} extends BaseCheck {
   }
 }
 `;
-  const dir = path9.dirname(absPath);
-  fs12.mkdirSync(dir, { recursive: true });
-  fs12.writeFileSync(absPath, template);
-  console.log(`Created custom check at ${path9.relative(REPO_ROOT, absPath)}`);
+  const dir = path10.dirname(absPath);
+  fs13.mkdirSync(dir, { recursive: true });
+  fs13.writeFileSync(absPath, template);
+  console.log(`Created custom check at ${path10.relative(REPO_ROOT, absPath)}`);
   console.log(`Add it to linter-config.json:`);
   console.log(JSON.stringify({
     name: className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
     export: className,
-    module: `./${path9.relative(REPO_ROOT, absPath).replace(/\\/g, "/")}`,
+    module: `./${path10.relative(REPO_ROOT, absPath).replace(/\\/g, "/")}`,
     modes: ["manual"],
     options: {}
   }, null, 2));
