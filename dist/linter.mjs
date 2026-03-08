@@ -6788,7 +6788,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "d552ea0" : "unknown";
+var LINTER_COMMIT = true ? "5d1004d" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6804,18 +6804,10 @@ var getRepoRoot = () => {
 var REPO_ROOT = getRepoRoot();
 var resolveClass = async (entry) => {
   const exportName = entry.export;
-  if (entry.module) {
-    const mod = await import(entry.module);
-    const Cls2 = mod[exportName];
-    if (!Cls2) {
-      throw new Error(`Export "${exportName}" not found in "${entry.module}"`);
-    }
-    return Cls2;
-  }
   const Cls = builtinRegistry[exportName];
   if (!Cls) {
     throw new Error(
-      `Export "${exportName}" not found in built-in registry. Available: ${Object.keys(builtinRegistry).join(", ")}. For custom checks, specify "module" in config.`
+      `Export "${exportName}" not found in built-in registry. Available: ${Object.keys(builtinRegistry).join(", ")}.`
     );
   }
   return Cls;
@@ -7121,7 +7113,6 @@ var printHelp = () => {
   lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
-  lines.push("  --create-check <path> Create a custom check template at the given path");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
   lines.push("  --upgrade             Upgrade to the latest version");
@@ -7158,8 +7149,6 @@ var printHelp = () => {
   lines.push("");
   lines.push("CONFIGURATION:");
   lines.push("  Place linter-config.json in the repo root. Run --init to generate one.");
-  lines.push('  Custom checks: extend BaseCheck and reference via "module" + "export" in config.');
-  lines.push("  Run --create-check <path> to scaffold a custom check file.");
   console.log(lines.join("\n"));
 };
 var initConfig = () => {
@@ -7186,59 +7175,6 @@ var initConfig = () => {
   fs15.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`Created ${path11.relative(REPO_ROOT, configPath)}`);
 };
-var createCheck = (targetPath) => {
-  const absPath = path11.resolve(REPO_ROOT, targetPath);
-  if (fs15.existsSync(absPath)) {
-    console.error(`File already exists: ${absPath}`);
-    process.exit(1);
-  }
-  const className = path11.basename(absPath, path11.extname(absPath)).replace(/(^|[-_])(\w)/g, (_, _sep, c) => c.toUpperCase());
-  const template = `import { BaseCheck } from "${path11.relative(path11.dirname(absPath), path11.join(__dirname, "checks", "base-check.js")).replace(/\\\\/g, "/")}";
-
-export class ${className} extends BaseCheck {
-  get name() {
-    return "${className}";
-  }
-
-  /**
-   * Return true if deps needed by this check are available.
-   */
-  checkDeps(deps) {
-    return true;
-  }
-
-  async lint(file, deps) {
-    // TODO: implement lint logic
-    return { status: "pass" };
-  }
-
-  async fix(file, deps) {
-    // TODO: implement fix logic
-    return this.lint(file, deps);
-  }
-
-  static getHelp() {
-    return {
-      name: "${className}",
-      description: "TODO: describe what this check does.",
-      options: "(none)",
-    };
-  }
-}
-`;
-  const dir = path11.dirname(absPath);
-  fs15.mkdirSync(dir, { recursive: true });
-  fs15.writeFileSync(absPath, template);
-  console.log(`Created custom check at ${path11.relative(REPO_ROOT, absPath)}`);
-  console.log(`Add it to linter-config.json:`);
-  console.log(JSON.stringify({
-    name: className.replace(/([a-z])([A-Z])/g, "$1-$2").toLowerCase(),
-    export: className,
-    module: `./${path11.relative(REPO_ROOT, absPath).replace(/\\/g, "/")}`,
-    modes: ["manual"],
-    options: {}
-  }, null, 2));
-};
 (async () => {
   const args = process.argv.slice(2);
   if (args.includes("--help") || args.includes("-h")) {
@@ -7259,16 +7195,6 @@ export class ${className} extends BaseCheck {
   }
   if (args.includes("--init")) {
     initConfig();
-    process.exit(0);
-  }
-  const createCheckIndex = args.indexOf("--create-check");
-  if (createCheckIndex !== -1) {
-    const targetPath = args[createCheckIndex + 1];
-    if (!targetPath) {
-      console.error("--create-check requires a file path argument");
-      process.exit(1);
-    }
-    createCheck(targetPath);
     process.exit(0);
   }
   const shouldLint = args.includes("--lint");

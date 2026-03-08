@@ -1,11 +1,8 @@
 /**
  * Registry of built-in checks and file sources.
  *
- * After esbuild bundles the linter, dynamic `import(path)` won't work
- * for built-in modules. Instead, linter-config.json references built-ins
+ * linter-config.json references checks and file sources
  * by their export name (e.g. "CrlfCheck") and we resolve them here.
- *
- * Custom / user-provided checks can still use "module" + "export" in config.
  */
 
 // --- checks ---
@@ -21,9 +18,6 @@ import { RegexCheck } from "./checks/regex-check.js";
 import { AllFilesSource } from "./file-sources/all-files-source.js";
 import { StagedFilesSource } from "./file-sources/staged-files-source.js";
 import { DiffBaseSource } from "./file-sources/diff-base-source.js";
-
-import { BaseCheck } from "./checks/base-check.js";
-import { BaseFileSource } from "./file-sources/base-file-source.js";
 
 export const builtinChecks = {
   CrlfCheck,
@@ -45,5 +39,3 @@ export const builtinRegistry = {
   ...builtinChecks,
   ...builtinFileSources,
 };
-
-export { BaseCheck, BaseFileSource };
