@@ -251,7 +251,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
 
       for (const check of checks) {
         try {
-          const res = await check.fix(file, deps);
+          const res = (typeof check.lintAndFix === "function" && await check.lintAndFix(file, deps)) || await check.fix(file, deps);
           if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
           fileResults.push({ res, checkName: check.name });
         } catch (err) {

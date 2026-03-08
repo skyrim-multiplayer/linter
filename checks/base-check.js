@@ -143,6 +143,19 @@ export class BaseCheck {
   }
 
   /**
+   * Optional combined lint+fix in a single operation.
+   * Checks that can evaluate and fix in one step (e.g. a single AI call)
+   * should override this. Return null to signal that the check does not
+   * support combined mode — the runner will fall back to fix().
+   * @param {string} file - Absolute path.
+   * @param {object} deps - Resolved dependencies.
+   * @returns {Promise<CheckResult | null>}
+   */
+  async lintAndFix(file, deps) {
+    return null;
+  }
+
+  /**
    * Return help info for this check class.
    * Subclasses should override to provide specific details.
    * @returns {{ name: string, description: string, options: string }}

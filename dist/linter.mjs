@@ -1062,6 +1062,18 @@ var BaseCheck = class {
     throw new Error("Not implemented: fix");
   }
   /**
+   * Optional combined lint+fix in a single operation.
+   * Checks that can evaluate and fix in one step (e.g. a single AI call)
+   * should override this. Return null to signal that the check does not
+   * support combined mode — the runner will fall back to fix().
+   * @param {string} file - Absolute path.
+   * @param {object} deps - Resolved dependencies.
+   * @returns {Promise<CheckResult | null>}
+   */
+  async lintAndFix(file, deps) {
+    return null;
+  }
+  /**
    * Return help info for this check class.
    * Subclasses should override to provide specific details.
    * @returns {{ name: string, description: string, options: string }}
@@ -1912,6 +1924,85 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
       const newContext = await this.#buildFileContext(filesToRead);
       if (!newContext.error) {
         const hash = this.#hash(newContext.value + "\n" + instruction);
+        await this.#lockWrite(relFile, hash);
+      }
+    }
+    return { status: "fixed", output: result.reason || "AI applied fixes" };
+  }
+  /**
+   * Combined lint + fix in a single AI call.
+   * When both lintPrompt and fixPrompt are configured, evaluates the file
+   * against lint criteria and applies the fix if needed — one round-trip.
+   * Returns null when combined mode is not available (only one prompt set).
+   */
+  async lintAndFix(file, _deps) {
+    if (!this.#lintPrompt || !this.#fixPrompt) return null;
+    const relFile = path7.relative(this.repoRoot, file);
+    const absFile = path7.resolve(file);
+    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const context = await this.#buildFileContext(filesToRead);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
+    const combinedKey = this.#lintPrompt + "\n" + this.#fixPrompt;
+    if (this.#lock) {
+      const hash = this.#hash(context.value + "\n" + combinedKey);
+      if (await this.#lockMatches(relFile, hash)) {
+        return { status: "pass" };
+      }
+    }
+    const prompt = `You are a code review and fixing assistant integrated into a linter.
+File: ${relFile}
+
+Lint criteria: ${this.#lintPrompt}
+Fix instruction: ${this.#fixPrompt}
+
+${context.value}
+
+First evaluate the file against the lint criteria.
+If the file PASSES, respond with ONLY a JSON object (no markdown fences):
+{ "pass": true, "reason": "short explanation" }
+
+If the file FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):
+{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected file content" }
+If the file fails but cannot be fixed, set pass to false and omit content.`;
+    let reply;
+    try {
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
+    } catch (err) {
+      return { status: "error", output: `Claude CLI error: ${err.message}` };
+    }
+    let result;
+    try {
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
+    } catch {
+      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+    }
+    if (result.pass) {
+      if (this.#lock) {
+        const hash = this.#hash(context.value + "\n" + combinedKey);
+        await this.#lockWrite(relFile, hash);
+      }
+      return { status: "pass" };
+    }
+    if (typeof result.content !== "string") {
+      return { status: "fail", output: result.reason || "AI check failed and could not produce a fix" };
+    }
+    let current;
+    try {
+      current = await fs10.readFile(absFile, "utf-8");
+    } catch (err) {
+      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    }
+    if (current === result.content) {
+      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    }
+    await fs10.writeFile(absFile, result.content, "utf-8");
+    if (this.#lock) {
+      const newContext = await this.#buildFileContext(filesToRead);
+      if (!newContext.error) {
+        const hash = this.#hash(newContext.value + "\n" + combinedKey);
         await this.#lockWrite(relFile, hash);
       }
     }
@@ -6788,7 +6879,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "5d1004d" : "unknown";
+var LINTER_COMMIT = true ? "bd94e3c" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6962,7 +7053,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
       const fileResults = [];
       for (const check of checks2) {
         try {
-          const res = await check.fix(file, deps);
+          const res = typeof check.lintAndFix === "function" && await check.lintAndFix(file, deps) || await check.fix(file, deps);
           if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
           fileResults.push({ res, checkName: check.name });
         } catch (err) {

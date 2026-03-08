@@ -195,6 +195,97 @@ export class AiPromptCheck extends BaseCheck {
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
 
+  /**
+   * Combined lint + fix in a single AI call.
+   * When both lintPrompt and fixPrompt are configured, evaluates the file
+   * against lint criteria and applies the fix if needed — one round-trip.
+   * Returns null when combined mode is not available (only one prompt set).
+   */
+  async lintAndFix(file, _deps) {
+    if (!this.#lintPrompt || !this.#fixPrompt) return null;
+
+    const relFile = path.relative(this.repoRoot, file);
+    const absFile = path.resolve(file);
+    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+
+    const context = await this.#buildFileContext(filesToRead);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
+
+    const combinedKey = this.#lintPrompt + "\n" + this.#fixPrompt;
+
+    if (this.#lock) {
+      const hash = this.#hash(context.value + "\n" + combinedKey);
+      if (await this.#lockMatches(relFile, hash)) {
+        return { status: "pass" };
+      }
+    }
+
+    const prompt =
+      `You are a code review and fixing assistant integrated into a linter.\n` +
+      `File: ${relFile}\n\n` +
+      `Lint criteria: ${this.#lintPrompt}\n` +
+      `Fix instruction: ${this.#fixPrompt}\n\n` +
+      `${context.value}\n\n` +
+      `First evaluate the file against the lint criteria.\n` +
+      `If the file PASSES, respond with ONLY a JSON object (no markdown fences):\n` +
+      `{ "pass": true, "reason": "short explanation" }\n\n` +
+      `If the file FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):\n` +
+      `{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected file content" }\n` +
+      `If the file fails but cannot be fixed, set pass to false and omit content.`;
+
+    let reply;
+    try {
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
+    } catch (err) {
+      return { status: "error", output: `Claude CLI error: ${err.message}` };
+    }
+
+    let result;
+    try {
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
+    } catch {
+      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+    }
+
+    if (result.pass) {
+      if (this.#lock) {
+        const hash = this.#hash(context.value + "\n" + combinedKey);
+        await this.#lockWrite(relFile, hash);
+      }
+      return { status: "pass" };
+    }
+
+    if (typeof result.content !== "string") {
+      return { status: "fail", output: result.reason || "AI check failed and could not produce a fix" };
+    }
+
+    let current;
+    try {
+      current = await fs.readFile(absFile, "utf-8");
+    } catch (err) {
+      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    }
+
+    if (current === result.content) {
+      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    }
+
+    await fs.writeFile(absFile, result.content, "utf-8");
+
+    if (this.#lock) {
+      const newContext = await this.#buildFileContext(filesToRead);
+      if (!newContext.error) {
+        const hash = this.#hash(newContext.value + "\n" + combinedKey);
+        await this.#lockWrite(relFile, hash);
+      }
+    }
+
+    return { status: "fixed", output: result.reason || "AI applied fixes" };
+  }
+
   #resolvePaths(paths, file) {
     return paths.map((p) => {
       const expanded = file ? this.#expandTemplate(p, file) : p;
