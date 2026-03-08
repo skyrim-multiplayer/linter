@@ -1686,9 +1686,14 @@ var AiPromptCheck = class extends BaseCheck {
   #lintPrompt;
   #fixPrompt;
   #model;
+  #filesToRead;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     const coerce = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
+    const coerceArray = (v) => {
+      if (v == null) return [];
+      return Array.isArray(v) ? v : [v];
+    };
     this.#prompt = coerce(options.prompt);
     this.#lintPrompt = coerce(options.lintPrompt);
     this.#fixPrompt = coerce(options.fixPrompt);
@@ -1696,6 +1701,7 @@ var AiPromptCheck = class extends BaseCheck {
       throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
     }
     this.#model = options.model || void 0;
+    this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
   }
   get name() {
     const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
@@ -1705,29 +1711,26 @@ var AiPromptCheck = class extends BaseCheck {
     return true;
   }
   async lint(file, _deps) {
-    let content;
-    try {
-      content = await fs10.readFile(file, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot read file: ${err.message}` };
-    }
     const relFile = path7.relative(this.repoRoot, file);
     const instruction = this.#lintPrompt || this.#prompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
     }
+    const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const context = await this.#buildFileContext(promptFiles);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
     const prompt = `You are a code review assistant integrated into a linter.
-File: ${relFile}
+Primary file: ${relFile}
 Instruction: ${instruction}
 
---- file content ---
-${content}
---- end of file ---
+${context.value}
 
 Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt, { print: true });
+      reply = await this.#callClaude(prompt);
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1744,20 +1747,27 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
   }
   async fix(file, _deps) {
-    const absFile = path7.resolve(file);
     const relFile = path7.relative(this.repoRoot, file);
     const instruction = this.#fixPrompt || this.#prompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
     }
+    const absFile = path7.resolve(file);
+    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const context = await this.#buildFileContext(filesToRead);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
     const prompt = `You are a code fixing assistant integrated into a linter.
-The file to fix is: ${absFile}
+File to fix: ${relFile}
 Instruction: ${instruction}
 
-Read the file, apply the fix directly by editing it, then respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation" }. If no changes are needed set changed to false.`;
+${context.value}
+
+Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation", "content": "full new file content" }. If no changes are needed, set changed to false and omit content.`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt, { print: false });
+      reply = await this.#callClaude(prompt);
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1768,22 +1778,65 @@ Read the file, apply the fix directly by editing it, then respond with ONLY a JS
     } catch {
       return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
-    if (!result.changed) {
+    if (!result.changed || typeof result.content !== "string") {
       return { status: "pass" };
     }
+    let current;
+    try {
+      current = await fs10.readFile(absFile, "utf-8");
+    } catch (err) {
+      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    }
+    if (current === result.content) {
+      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    }
+    await fs10.writeFile(absFile, result.content, "utf-8");
     return { status: "fixed", output: result.reason || "AI applied fixes" };
+  }
+  #resolvePaths(paths, file) {
+    return paths.map((p) => {
+      const expanded = file ? this.#expandTemplate(p, file) : p;
+      const candidate = path7.isAbsolute(expanded) ? expanded : path7.resolve(this.repoRoot, expanded);
+      return path7.resolve(candidate);
+    });
+  }
+  #expandTemplate(template, file) {
+    const absFile = path7.resolve(file);
+    const rel = path7.relative(this.repoRoot, absFile);
+    const ext = path7.extname(rel);
+    const basename = path7.basename(rel);
+    const name = path7.basename(rel, ext);
+    const dir = path7.dirname(rel);
+    return template.replace(/\{name\}/g, name).replace(/\{basename\}/g, basename).replace(/\{ext\}/g, ext).replace(/\{dir\}/g, dir);
+  }
+  #dedupePaths(paths) {
+    return Array.from(new Set(paths.map((p) => path7.resolve(p))));
+  }
+  async #buildFileContext(absPaths) {
+    const chunks = [];
+    for (const absPath of absPaths) {
+      const rel = path7.relative(this.repoRoot, absPath);
+      if (rel.startsWith("..") || path7.isAbsolute(rel)) {
+        return { error: `path outside repo root is not allowed: ${absPath}` };
+      }
+      let content;
+      try {
+        content = await fs10.readFile(absPath, "utf-8");
+      } catch (err) {
+        return { error: `cannot read context file ${rel}: ${err.message}` };
+      }
+      chunks.push(`--- file: ${rel} ---
+${content}
+--- end file: ${rel} ---`);
+    }
+    return { value: chunks.join("\n\n") };
   }
   /**
    * @param {string} prompt
-   * @param {{ print?: boolean }} opts  — print: true for lint (text-only),
-   *                                      false for fix (agentic, can edit files)
    */
-  #callClaude(prompt, { print = true } = {}) {
+  #callClaude(prompt) {
     return new Promise((resolve, reject) => {
-      const args = ["--dangerously-skip-permissions"];
-      if (print) {
-        args.push("--print");
-      }
+      const args = ["--print"];
       if (this.#model) {
         args.push("--model", this.#model);
       }
@@ -1823,8 +1876,8 @@ Read the file, apply the fix directly by editing it, then respond with ONLY a JS
   static getHelp() {
     return {
       name: "AiPromptCheck",
-      description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix lets Claude edit the file directly.",
-      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); model \u2014 Claude model (optional, uses CLI default)"
+      description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
+      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); model \u2014 Claude model (optional, uses CLI default); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates)"
     };
   }
 };
@@ -6552,7 +6605,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "d23a6f2" : "unknown";
+var LINTER_COMMIT = true ? "fe9744e" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

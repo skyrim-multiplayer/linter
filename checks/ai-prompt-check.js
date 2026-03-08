@@ -4,31 +4,41 @@ import { spawn } from "child_process";
 import { BaseCheck } from "./base-check.js";
 
 /**
- * AI Prompt check — invokes the Claude CLI (`claude`) with
- * `--dangerously-skip-permissions` to let it run any commands and
- * edit any files autonomously.
+ * AI Prompt check — invokes the Claude CLI (`claude --print`) in a
+ * text-only workflow.
  *
  * Options (from linter-config.json):
- *   prompt — instruction telling the AI what to check (required)
- *   model  — Claude model name (optional, uses CLI default if omitted)
+ *   prompt         — shared instruction (required unless lint/fix prompts are set)
+ *   lintPrompt     — lint-specific instruction (overrides prompt)
+ *   fixPrompt      — fix-specific instruction (overrides prompt)
+ *   model          — Claude model name (optional, uses CLI default if omitted)
+ *   filesToRead    — additional files to include as context (array of paths)
+ *                    Supports templates: {name} (filename without ext),
+ *                    {basename} (filename with ext), {ext} (extension with dot),
+ *                    {dir} (directory relative to repo root).
  *
  * Lint mode:
- *   Pipes file content + prompt to `claude --print` and asks for a
+ *   Pipes selected file contents + prompt to `claude --print` and asks for a
  *   JSON verdict: { "pass": true/false, "reason": "..." }
  *
  * Fix mode:
- *   Invokes Claude CLI with full permissions. Claude reads and edits
- *   the file directly, then reports what it changed.
+ *   Sends selected file contents to `claude --print` and expects JSON with
+ *   updated content for allowed files only. This check applies edits itself.
  */
 export class AiPromptCheck extends BaseCheck {
   #prompt;
   #lintPrompt;
   #fixPrompt;
   #model;
+  #filesToRead;
 
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     const coerce = (v) => (v == null ? undefined : Array.isArray(v) ? v.join("\n") : v);
+    const coerceArray = (v) => {
+      if (v == null) return [];
+      return Array.isArray(v) ? v : [v];
+    };
 
     this.#prompt = coerce(options.prompt);
     this.#lintPrompt = coerce(options.lintPrompt);
@@ -39,6 +49,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     this.#model = options.model || undefined;
+    this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
   }
 
   get name() {
@@ -51,30 +62,29 @@ export class AiPromptCheck extends BaseCheck {
   }
 
   async lint(file, _deps) {
-    let content;
-    try {
-      content = await fs.readFile(file, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot read file: ${err.message}` };
-    }
-
     const relFile = path.relative(this.repoRoot, file);
     const instruction = this.#lintPrompt || this.#prompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
     }
 
+    const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const context = await this.#buildFileContext(promptFiles);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
+
     const prompt =
       `You are a code review assistant integrated into a linter.\n` +
-      `File: ${relFile}\n` +
+      `Primary file: ${relFile}\n` +
       `Instruction: ${instruction}\n\n` +
-      `--- file content ---\n${content}\n--- end of file ---\n\n` +
+      `${context.value}\n\n` +
       `Respond with ONLY a JSON object (no markdown fences): ` +
       `{ "pass": true/false, "reason": "short explanation" }`;
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt, { print: true });
+      reply = await this.#callClaude(prompt);
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -94,25 +104,32 @@ export class AiPromptCheck extends BaseCheck {
   }
 
   async fix(file, _deps) {
-    const absFile = path.resolve(file);
     const relFile = path.relative(this.repoRoot, file);
     const instruction = this.#fixPrompt || this.#prompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
     }
 
+    const absFile = path.resolve(file);
+    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+
+    const context = await this.#buildFileContext(filesToRead);
+    if (context.error) {
+      return { status: "error", output: context.error };
+    }
+
     const prompt =
       `You are a code fixing assistant integrated into a linter.\n` +
-      `The file to fix is: ${absFile}\n` +
+      `File to fix: ${relFile}\n` +
       `Instruction: ${instruction}\n\n` +
-      `Read the file, apply the fix directly by editing it, then respond ` +
-      `with ONLY a JSON object (no markdown fences): ` +
-      `{ "changed": true/false, "reason": "short explanation" }. ` +
-      `If no changes are needed set changed to false.`;
+      `${context.value}\n\n` +
+      `Respond with ONLY a JSON object (no markdown fences): ` +
+      `{ "changed": true/false, "reason": "short explanation", "content": "full new file content" }. ` +
+      `If no changes are needed, set changed to false and omit content.`;
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt, { print: false });
+      reply = await this.#callClaude(prompt);
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -125,24 +142,75 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
 
-    if (!result.changed) {
+    if (!result.changed || typeof result.content !== "string") {
       return { status: "pass" };
     }
 
+    let current;
+    try {
+      current = await fs.readFile(absFile, "utf-8");
+    } catch (err) {
+      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    }
+
+    if (current === result.content) {
+      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    }
+
+    await fs.writeFile(absFile, result.content, "utf-8");
     return { status: "fixed", output: result.reason || "AI applied fixes" };
+  }
+
+  #resolvePaths(paths, file) {
+    return paths.map((p) => {
+      const expanded = file ? this.#expandTemplate(p, file) : p;
+      const candidate = path.isAbsolute(expanded) ? expanded : path.resolve(this.repoRoot, expanded);
+      return path.resolve(candidate);
+    });
+  }
+
+  #expandTemplate(template, file) {
+    const absFile = path.resolve(file);
+    const rel = path.relative(this.repoRoot, absFile);
+    const ext = path.extname(rel);
+    const basename = path.basename(rel);
+    const name = path.basename(rel, ext);
+    const dir = path.dirname(rel);
+    return template
+      .replace(/\{name\}/g, name)
+      .replace(/\{basename\}/g, basename)
+      .replace(/\{ext\}/g, ext)
+      .replace(/\{dir\}/g, dir);
+  }
+
+  #dedupePaths(paths) {
+    return Array.from(new Set(paths.map((p) => path.resolve(p))));
+  }
+
+  async #buildFileContext(absPaths) {
+    const chunks = [];
+    for (const absPath of absPaths) {
+      const rel = path.relative(this.repoRoot, absPath);
+      if (rel.startsWith("..") || path.isAbsolute(rel)) {
+        return { error: `path outside repo root is not allowed: ${absPath}` };
+      }
+      let content;
+      try {
+        content = await fs.readFile(absPath, "utf-8");
+      } catch (err) {
+        return { error: `cannot read context file ${rel}: ${err.message}` };
+      }
+      chunks.push(`--- file: ${rel} ---\n${content}\n--- end file: ${rel} ---`);
+    }
+    return { value: chunks.join("\n\n") };
   }
 
   /**
    * @param {string} prompt
-   * @param {{ print?: boolean }} opts  — print: true for lint (text-only),
-   *                                      false for fix (agentic, can edit files)
    */
-  #callClaude(prompt, { print = true } = {}) {
+  #callClaude(prompt) {
     return new Promise((resolve, reject) => {
-      const args = ["--dangerously-skip-permissions"];
-      if (print) {
-        args.push("--print");
-      }
+      const args = ["--print"];
       if (this.#model) {
         args.push("--model", this.#model);
       }
@@ -187,12 +255,13 @@ export class AiPromptCheck extends BaseCheck {
       name: "AiPromptCheck",
       description:
         "Invokes the Claude CLI with a user-defined prompt. " +
-        "Lint asks Claude to evaluate pass/fail. Fix lets Claude edit the file directly.",
+        "Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
       options:
         "prompt — shared instruction for the AI (string or array); " +
         "lintPrompt — lint-specific instruction (overrides prompt); " +
         "fixPrompt — fix-specific instruction (overrides prompt); " +
-        "model — Claude model (optional, uses CLI default)",
+        "model — Claude model (optional, uses CLI default); " +
+        "filesToRead — additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates)",
     };
   }
 }
