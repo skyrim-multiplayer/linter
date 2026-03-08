@@ -213,11 +213,12 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    const combinedKey = this.#lintPrompt + "\n" + this.#fixPrompt;
-
+    // Check lock against all key variants so that files already verified by
+    // a prior lint() or fix() run are still recognised as cached.
     if (this.#lock) {
-      const hash = this.#hash(context.value + "\n" + combinedKey);
-      if (await this.#lockMatches(relFile, hash)) {
+      const lintHash = this.#hash(context.value + "\n" + this.#lintPrompt);
+      const fixHash = this.#hash(context.value + "\n" + this.#fixPrompt);
+      if (await this.#lockMatches(relFile, lintHash) && await this.#lockMatches(relFile, fixHash)) {
         return { status: "pass" };
       }
     }
@@ -252,8 +253,8 @@ export class AiPromptCheck extends BaseCheck {
 
     if (result.pass) {
       if (this.#lock) {
-        const hash = this.#hash(context.value + "\n" + combinedKey);
-        await this.#lockWrite(relFile, hash);
+        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#lintPrompt));
+        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#fixPrompt));
       }
       return { status: "pass" };
     }
@@ -278,8 +279,8 @@ export class AiPromptCheck extends BaseCheck {
     if (this.#lock) {
       const newContext = await this.#buildFileContext(filesToRead);
       if (!newContext.error) {
-        const hash = this.#hash(newContext.value + "\n" + combinedKey);
-        await this.#lockWrite(relFile, hash);
+        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#lintPrompt));
+        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#fixPrompt));
       }
     }
 

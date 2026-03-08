@@ -1944,10 +1944,10 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    const combinedKey = this.#lintPrompt + "\n" + this.#fixPrompt;
     if (this.#lock) {
-      const hash = this.#hash(context.value + "\n" + combinedKey);
-      if (await this.#lockMatches(relFile, hash)) {
+      const lintHash = this.#hash(context.value + "\n" + this.#lintPrompt);
+      const fixHash = this.#hash(context.value + "\n" + this.#fixPrompt);
+      if (await this.#lockMatches(relFile, lintHash) && await this.#lockMatches(relFile, fixHash)) {
         return { status: "pass" };
       }
     }
@@ -1981,8 +1981,8 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     }
     if (result.pass) {
       if (this.#lock) {
-        const hash = this.#hash(context.value + "\n" + combinedKey);
-        await this.#lockWrite(relFile, hash);
+        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#lintPrompt));
+        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#fixPrompt));
       }
       return { status: "pass" };
     }
@@ -2002,8 +2002,8 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     if (this.#lock) {
       const newContext = await this.#buildFileContext(filesToRead);
       if (!newContext.error) {
-        const hash = this.#hash(newContext.value + "\n" + combinedKey);
-        await this.#lockWrite(relFile, hash);
+        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#lintPrompt));
+        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#fixPrompt));
       }
     }
     return { status: "fixed", output: result.reason || "AI applied fixes" };
@@ -6879,7 +6879,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "9c556e7" : "unknown";
+var LINTER_COMMIT = true ? "fccefc4" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
