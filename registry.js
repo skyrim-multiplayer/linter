@@ -15,6 +15,7 @@ import { ClangFormatCheck } from "./checks/clang-format-check.js";
 import { PairedFilesCheck } from "./checks/paired-files-check.js";
 import { CodegenCheck } from "./checks/codegen-check.js";
 import { AiPromptCheck } from "./checks/ai-prompt-check.js";
+import { RegexCheck } from "./checks/regex-check.js";
 
 // --- file sources ---
 import { AllFilesSource } from "./file-sources/all-files-source.js";
@@ -31,6 +32,7 @@ export const builtinChecks = {
   PairedFilesCheck,
   CodegenCheck,
   AiPromptCheck,
+  RegexCheck,
 };
 
 export const builtinFileSources = {

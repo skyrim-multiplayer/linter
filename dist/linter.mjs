@@ -782,7 +782,7 @@ var require_dist2 = __commonJS({
 });
 
 // linter.js
-import fs14 from "fs";
+import fs15 from "fs";
 import path11 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
@@ -1988,8 +1988,86 @@ ${content}
   }
 };
 
+// checks/regex-check.js
+import fs11 from "fs/promises";
+var RegexCheck = class extends BaseCheck {
+  #pattern;
+  #replacement;
+  #message;
+  #skipLineRes;
+  constructor(repoRoot, options = {}) {
+    super(repoRoot, options);
+    if (!options.pattern) {
+      throw new Error("RegexCheck requires a 'pattern' option");
+    }
+    const flags = options.patternFlags ?? "g";
+    this.#pattern = new RegExp(options.pattern, flags);
+    this.#replacement = options.replacement ?? null;
+    this.#message = options.message ?? "regex violation";
+    this.#skipLineRes = (options.skipLinePatterns || []).map(
+      (p) => new RegExp(p)
+    );
+  }
+  get name() {
+    return this.#message;
+  }
+  async lint(file) {
+    try {
+      const content = await fs11.readFile(file, "utf-8");
+      const violations = [];
+      for (const [lineNo, line] of content.split("\n").entries()) {
+        if (this.#skipLineRes.some((re2) => re2.test(line))) continue;
+        const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+        let m;
+        while ((m = re.exec(line)) !== null) {
+          violations.push(`  line ${lineNo + 1}: ${m[0]}`);
+          if (!re.global) break;
+        }
+      }
+      if (violations.length > 0) {
+        return {
+          status: "fail",
+          output: `${this.#message} (${violations.length} hit(s)):
+${violations.join("\n")}`
+        };
+      }
+      return { status: "pass" };
+    } catch (err) {
+      return { status: "error", output: err.message };
+    }
+  }
+  async fix(file) {
+    if (!this.#replacement) {
+      return this.lint(file);
+    }
+    try {
+      const original = await fs11.readFile(file, "utf-8");
+      const lines = original.split("\n");
+      const fixed = lines.map((line) => {
+        if (this.#skipLineRes.some((re2) => re2.test(line))) return line;
+        const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+        return line.replace(re, this.#replacement);
+      }).join("\n");
+      if (fixed !== original) {
+        await fs11.writeFile(file, fixed, "utf-8");
+        return { status: "fixed" };
+      }
+      return { status: "pass" };
+    } catch (err) {
+      return { status: "error", output: err.message };
+    }
+  }
+  static getHelp() {
+    return {
+      name: "RegexCheck",
+      description: "Generic regex-based check. Finds lines matching a pattern and optionally auto-fixes them using a replacement string. Fully configured via options in linter-config.json.",
+      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped'
+    };
+  }
+};
+
 // file-sources/all-files-source.js
-import fs11 from "fs";
+import fs12 from "fs";
 import path8 from "path";
 
 // node_modules/simple-git/dist/esm/index.js
@@ -6585,7 +6663,7 @@ var AllFilesSource = class extends BaseFileSource {
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs11.promises.access(filePath, fs11.constants.F_OK);
+          await fs12.promises.access(filePath, fs12.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6604,7 +6682,7 @@ var AllFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/staged-files-source.js
-import fs12 from "fs";
+import fs13 from "fs";
 import path9 from "path";
 var StagedFilesSource = class extends BaseFileSource {
   get name() {
@@ -6617,7 +6695,7 @@ var StagedFilesSource = class extends BaseFileSource {
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs12.promises.access(filePath, fs12.constants.F_OK);
+          await fs13.promises.access(filePath, fs13.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6636,7 +6714,7 @@ var StagedFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/diff-base-source.js
-import fs13 from "fs";
+import fs14 from "fs";
 import path10 from "path";
 var DiffBaseSource = class extends BaseFileSource {
   get name() {
@@ -6651,7 +6729,7 @@ var DiffBaseSource = class extends BaseFileSource {
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs13.promises.access(filePath, fs13.constants.F_OK);
+          await fs14.promises.access(filePath, fs14.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6695,7 +6773,8 @@ var builtinChecks = {
   ClangFormatCheck,
   PairedFilesCheck,
   CodegenCheck,
-  AiPromptCheck
+  AiPromptCheck,
+  RegexCheck
 };
 var builtinFileSources = {
   AllFilesSource,
@@ -6711,7 +6790,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "879ab5b" : "unknown";
+var LINTER_COMMIT = true ? "3d66243" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6745,7 +6824,7 @@ var resolveClass = async (entry) => {
 };
 var loadConfig = async (mode) => {
   const configPath = path11.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(await fs14.promises.readFile(configPath, "utf-8"));
+  const config = JSON.parse(await fs15.promises.readFile(configPath, "utf-8"));
   const toolsDir = config.toolsDir ? path11.resolve(REPO_ROOT, config.toolsDir) : path11.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
@@ -6942,13 +7021,13 @@ var installHook = () => {
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --mode hook
 `;
-  if (fs14.existsSync(hookPath)) {
+  if (fs15.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
-    fs14.copyFileSync(hookPath, backup);
+    fs15.copyFileSync(hookPath, backup);
     console.log(`Existing pre-commit hook backed up to ${path11.basename(backup)}`);
   }
-  fs14.mkdirSync(hooksDir, { recursive: true });
-  fs14.writeFileSync(hookPath, hookContent, { mode: 493 });
+  fs15.mkdirSync(hooksDir, { recursive: true });
+  fs15.writeFileSync(hookPath, hookContent, { mode: 493 });
   console.log(`Installed pre-commit hook at ${path11.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
@@ -7009,20 +7088,20 @@ var upgrade = () => {
         );
       } catch {
         try {
-          fs14.unlinkSync(tmpPath);
+          fs15.unlinkSync(tmpPath);
         } catch {
         }
         console.error("Download failed.");
         process.exit(1);
       }
-      const head = fs14.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      const head = fs15.readFileSync(tmpPath, "utf-8").slice(0, 100);
       if (!head.startsWith("#!/")) {
-        fs14.unlinkSync(tmpPath);
+        fs15.unlinkSync(tmpPath);
         console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
         process.exit(1);
       }
-      fs14.renameSync(tmpPath, __filename);
-      fs14.chmodSync(__filename, 493);
+      fs15.renameSync(tmpPath, __filename);
+      fs15.chmodSync(__filename, 493);
       console.log(`Updated ${__filename}`);
       try {
         execSync(`node "${__filename}" --version`, { stdio: "inherit" });
@@ -7087,7 +7166,7 @@ var printHelp = () => {
 };
 var initConfig = () => {
   const configPath = path11.join(REPO_ROOT, "linter-config.json");
-  if (fs14.existsSync(configPath)) {
+  if (fs15.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
   }
@@ -7106,12 +7185,12 @@ var initConfig = () => {
     },
     checks: checkEntries
   };
-  fs14.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  fs15.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`Created ${path11.relative(REPO_ROOT, configPath)}`);
 };
 var createCheck = (targetPath) => {
   const absPath = path11.resolve(REPO_ROOT, targetPath);
-  if (fs14.existsSync(absPath)) {
+  if (fs15.existsSync(absPath)) {
     console.error(`File already exists: ${absPath}`);
     process.exit(1);
   }
@@ -7150,8 +7229,8 @@ export class ${className} extends BaseCheck {
 }
 `;
   const dir = path11.dirname(absPath);
-  fs14.mkdirSync(dir, { recursive: true });
-  fs14.writeFileSync(absPath, template);
+  fs15.mkdirSync(dir, { recursive: true });
+  fs15.writeFileSync(absPath, template);
   console.log(`Created custom check at ${path11.relative(REPO_ROOT, absPath)}`);
   console.log(`Add it to linter-config.json:`);
   console.log(JSON.stringify({
