@@ -1681,7 +1681,102 @@ var CodegenCheck = class extends BaseCheck {
 import { promises as fs10 } from "fs";
 import { createHash } from "crypto";
 import path7 from "path";
+
+// ai-providers/claude.js
 import { spawn } from "child_process";
+
+// ai-providers/base-ai-provider.js
+var BaseAiProvider = class {
+  /**
+   * @returns {string} Human-readable name of the provider.
+   */
+  get name() {
+    throw new Error("Not implemented: name");
+  }
+  /**
+   * Check whether this provider's dependencies are available.
+   * @returns {boolean}
+   */
+  checkDeps() {
+    throw new Error("Not implemented: checkDeps");
+  }
+  /**
+   * Send a prompt and return the AI's text response.
+   * @param {string} prompt
+   * @param {{ cwd?: string }} options
+   * @returns {Promise<string>}
+   */
+  async call(prompt, options = {}) {
+    throw new Error("Not implemented: call");
+  }
+  /**
+   * Return help info for this provider class.
+   * @returns {{ name: string, description: string }}
+   */
+  static getHelp() {
+    return { name: "BaseAiProvider", description: "Abstract base class for AI providers." };
+  }
+};
+
+// ai-providers/claude.js
+var ClaudeProvider = class extends BaseAiProvider {
+  get name() {
+    return "Claude CLI";
+  }
+  checkDeps() {
+    return true;
+  }
+  /**
+   * Send a prompt to `claude --print` and return the response.
+   * @param {string} prompt
+   * @param {{ cwd?: string }} options
+   * @returns {Promise<string>}
+   */
+  async call(prompt, options = {}) {
+    return new Promise((resolve, reject) => {
+      const args = ["--print"];
+      const proc = spawn("claude", args, {
+        cwd: options.cwd,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (data) => {
+        stdout += data;
+      });
+      proc.stderr.on("data", (data) => {
+        stderr += data;
+      });
+      proc.on("error", (err) => {
+        if (err.code === "ENOENT") {
+          reject(new Error("claude CLI not found on PATH"));
+        } else {
+          reject(err);
+        }
+      });
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          const parts = [`claude exited with code ${code}`];
+          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+          reject(new Error(parts.join("\n")));
+          return;
+        }
+        resolve(stdout.trim());
+      });
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    });
+  }
+  static getHelp() {
+    return {
+      name: "ClaudeProvider",
+      description: "Invokes the Claude CLI (claude --print) to get AI responses."
+    };
+  }
+};
+
+// checks/ai-prompt-check.js
 var LOCKFILE_NAME = ".ai-prompt-lock.json";
 var AiPromptCheck = class extends BaseCheck {
   #prompt;
@@ -1689,6 +1784,7 @@ var AiPromptCheck = class extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #lock;
+  #provider;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     const coerce = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
@@ -1704,6 +1800,7 @@ var AiPromptCheck = class extends BaseCheck {
     }
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
+    this.#provider = new ClaudeProvider();
   }
   get name() {
     const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
@@ -1738,7 +1835,7 @@ ${context.value}
 Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1785,7 +1882,7 @@ ${context.value}
 Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation", "content": "full new file content" }. If no changes are needed, set changed to false and omit content.`;
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -1881,45 +1978,6 @@ ${content}
 --- end file: ${rel} ---`);
     }
     return { value: chunks.join("\n\n") };
-  }
-  /**
-   * @param {string} prompt
-   */
-  #callClaude(prompt) {
-    return new Promise((resolve, reject) => {
-      const args = ["--print"];
-      const proc = spawn("claude", args, {
-        cwd: this.repoRoot,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      let stdout = "";
-      let stderr = "";
-      proc.stdout.on("data", (data) => {
-        stdout += data;
-      });
-      proc.stderr.on("data", (data) => {
-        stderr += data;
-      });
-      proc.on("error", (err) => {
-        if (err.code === "ENOENT") {
-          reject(new Error("claude CLI not found on PATH"));
-        } else {
-          reject(err);
-        }
-      });
-      proc.on("close", (code) => {
-        if (code !== 0) {
-          const parts = [`claude exited with code ${code}`];
-          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
-          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
-          reject(new Error(parts.join("\n")));
-          return;
-        }
-        resolve(stdout.trim());
-      });
-      proc.stdin.write(prompt);
-      proc.stdin.end();
-    });
   }
   static getHelp() {
     return {
@@ -6653,7 +6711,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "2526210" : "unknown";
+var LINTER_COMMIT = true ? "879ab5b" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

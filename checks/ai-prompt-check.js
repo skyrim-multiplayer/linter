@@ -1,8 +1,8 @@
 import { promises as fs } from "fs";
 import { createHash } from "crypto";
 import path from "path";
-import { spawn } from "child_process";
 import { BaseCheck } from "./base-check.js";
+import { ClaudeProvider } from "../ai-providers/claude.js";
 
 const LOCKFILE_NAME = ".ai-prompt-lock.json";
 
@@ -35,6 +35,7 @@ export class AiPromptCheck extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #lock;
+  #provider;
 
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
@@ -54,6 +55,7 @@ export class AiPromptCheck extends BaseCheck {
 
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
+    this.#provider = new ClaudeProvider();
   }
 
   get name() {
@@ -95,7 +97,7 @@ export class AiPromptCheck extends BaseCheck {
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -151,7 +153,7 @@ export class AiPromptCheck extends BaseCheck {
 
     let reply;
     try {
-      reply = await this.#callClaude(prompt);
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
       return { status: "error", output: `Claude CLI error: ${err.message}` };
     }
@@ -264,48 +266,6 @@ export class AiPromptCheck extends BaseCheck {
       chunks.push(`--- file: ${rel} ---\n${content}\n--- end file: ${rel} ---`);
     }
     return { value: chunks.join("\n\n") };
-  }
-
-  /**
-   * @param {string} prompt
-   */
-  #callClaude(prompt) {
-    return new Promise((resolve, reject) => {
-      const args = ["--print"];
-
-      const proc = spawn("claude", args, {
-        cwd: this.repoRoot,
-        stdio: ["pipe", "pipe", "pipe"],
-      });
-
-      let stdout = "";
-      let stderr = "";
-
-      proc.stdout.on("data", (data) => { stdout += data; });
-      proc.stderr.on("data", (data) => { stderr += data; });
-
-      proc.on("error", (err) => {
-        if (err.code === "ENOENT") {
-          reject(new Error("claude CLI not found on PATH"));
-        } else {
-          reject(err);
-        }
-      });
-
-      proc.on("close", (code) => {
-        if (code !== 0) {
-          const parts = [`claude exited with code ${code}`];
-          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
-          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
-          reject(new Error(parts.join("\n")));
-          return;
-        }
-        resolve(stdout.trim());
-      });
-
-      proc.stdin.write(prompt);
-      proc.stdin.end();
-    });
   }
 
   static getHelp() {
