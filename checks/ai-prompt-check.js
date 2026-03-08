@@ -14,7 +14,6 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *   prompt         — shared instruction (required unless lint/fix prompts are set)
  *   lintPrompt     — lint-specific instruction (overrides prompt)
  *   fixPrompt      — fix-specific instruction (overrides prompt)
- *   model          — Claude model name (optional, uses CLI default if omitted)
  *   filesToRead    — additional files to include as context (array of paths)
  *                    Supports templates: {name} (filename without ext),
  *                    {basename} (filename with ext), {ext} (extension with dot),
@@ -34,7 +33,6 @@ export class AiPromptCheck extends BaseCheck {
   #prompt;
   #lintPrompt;
   #fixPrompt;
-  #model;
   #filesToRead;
   #lock;
 
@@ -54,7 +52,6 @@ export class AiPromptCheck extends BaseCheck {
       throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
     }
 
-    this.#model = options.model || undefined;
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
   }
@@ -275,9 +272,6 @@ export class AiPromptCheck extends BaseCheck {
   #callClaude(prompt) {
     return new Promise((resolve, reject) => {
       const args = ["--print"];
-      if (this.#model) {
-        args.push("--model", this.#model);
-      }
 
       const proc = spawn("claude", args, {
         cwd: this.repoRoot,
@@ -324,7 +318,6 @@ export class AiPromptCheck extends BaseCheck {
         "prompt — shared instruction for the AI (string or array); " +
         "lintPrompt — lint-specific instruction (overrides prompt); " +
         "fixPrompt — fix-specific instruction (overrides prompt); " +
-        "model — Claude model (optional, uses CLI default); " +
         "filesToRead — additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); " +
         "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false)",
     };

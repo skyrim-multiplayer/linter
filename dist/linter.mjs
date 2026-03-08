@@ -1687,7 +1687,6 @@ var AiPromptCheck = class extends BaseCheck {
   #prompt;
   #lintPrompt;
   #fixPrompt;
-  #model;
   #filesToRead;
   #lock;
   constructor(repoRoot, options = {}) {
@@ -1703,7 +1702,6 @@ var AiPromptCheck = class extends BaseCheck {
     if (!this.#prompt && !this.#lintPrompt && !this.#fixPrompt) {
       throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
     }
-    this.#model = options.model || void 0;
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
   }
@@ -1890,9 +1888,6 @@ ${content}
   #callClaude(prompt) {
     return new Promise((resolve, reject) => {
       const args = ["--print"];
-      if (this.#model) {
-        args.push("--model", this.#model);
-      }
       const proc = spawn("claude", args, {
         cwd: this.repoRoot,
         stdio: ["pipe", "pipe", "pipe"]
@@ -1930,7 +1925,7 @@ ${content}
     return {
       name: "AiPromptCheck",
       description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
-      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); model \u2014 Claude model (optional, uses CLI default); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false)"
+      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false)"
     };
   }
 };
@@ -6658,7 +6653,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "78ce48b" : "unknown";
+var LINTER_COMMIT = true ? "2526210" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
