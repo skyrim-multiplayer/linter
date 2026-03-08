@@ -11,9 +11,8 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  * text-only workflow.
  *
  * Options (from linter-config.json):
- *   prompt         — shared instruction (required unless lint/fix prompts are set)
- *   lintPrompt     — lint-specific instruction (overrides prompt)
- *   fixPrompt      — fix-specific instruction (overrides prompt)
+ *   lintPrompt     — lint-specific instruction
+ *   fixPrompt      — fix-specific instruction
  *   filesToRead    — additional files to include as context (array of paths)
  *                    Supports templates: {name} (filename without ext),
  *                    {basename} (filename with ext), {ext} (extension with dot),
@@ -30,7 +29,6 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *   updated content for allowed files only. This check applies edits itself.
  */
 export class AiPromptCheck extends BaseCheck {
-  #prompt;
   #lintPrompt;
   #fixPrompt;
   #filesToRead;
@@ -45,12 +43,11 @@ export class AiPromptCheck extends BaseCheck {
       return Array.isArray(v) ? v : [v];
     };
 
-    this.#prompt = coerce(options.prompt);
     this.#lintPrompt = coerce(options.lintPrompt);
     this.#fixPrompt = coerce(options.fixPrompt);
 
-    if (!this.#prompt && !this.#lintPrompt && !this.#fixPrompt) {
-      throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
+    if (!this.#lintPrompt && !this.#fixPrompt) {
+      throw new Error("AiPromptCheck requires at least one of: lintPrompt, fixPrompt");
     }
 
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
@@ -59,7 +56,7 @@ export class AiPromptCheck extends BaseCheck {
   }
 
   get name() {
-    const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
+    const label = this.#lintPrompt || this.#fixPrompt;
     return `AI Prompt (${label.slice(0, 50)}${label.length > 50 ? "…" : ""})`;
   }
 
@@ -69,9 +66,9 @@ export class AiPromptCheck extends BaseCheck {
 
   async lint(file, _deps) {
     const relFile = path.relative(this.repoRoot, file);
-    const instruction = this.#lintPrompt || this.#prompt;
+    const instruction = this.#lintPrompt;
     if (!instruction) {
-      return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
+      return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
 
     const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
@@ -122,9 +119,9 @@ export class AiPromptCheck extends BaseCheck {
 
   async fix(file, _deps) {
     const relFile = path.relative(this.repoRoot, file);
-    const instruction = this.#fixPrompt || this.#prompt;
+    const instruction = this.#fixPrompt;
     if (!instruction) {
-      return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
+      return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
     }
 
     const absFile = path.resolve(file);
@@ -275,9 +272,8 @@ export class AiPromptCheck extends BaseCheck {
         "Invokes the Claude CLI with a user-defined prompt. " +
         "Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
       options:
-        "prompt — shared instruction for the AI (string or array); " +
-        "lintPrompt — lint-specific instruction (overrides prompt); " +
-        "fixPrompt — fix-specific instruction (overrides prompt); " +
+        "lintPrompt — lint-specific instruction (string or array); " +
+        "fixPrompt — fix-specific instruction (string or array); " +
         "filesToRead — additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); " +
         "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false)",
     };

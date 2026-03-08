@@ -1779,7 +1779,6 @@ var ClaudeProvider = class extends BaseAiProvider {
 // checks/ai-prompt-check.js
 var LOCKFILE_NAME = ".ai-prompt-lock.json";
 var AiPromptCheck = class extends BaseCheck {
-  #prompt;
   #lintPrompt;
   #fixPrompt;
   #filesToRead;
@@ -1792,18 +1791,17 @@ var AiPromptCheck = class extends BaseCheck {
       if (v == null) return [];
       return Array.isArray(v) ? v : [v];
     };
-    this.#prompt = coerce(options.prompt);
     this.#lintPrompt = coerce(options.lintPrompt);
     this.#fixPrompt = coerce(options.fixPrompt);
-    if (!this.#prompt && !this.#lintPrompt && !this.#fixPrompt) {
-      throw new Error("AiPromptCheck requires at least one of: prompt, lintPrompt, fixPrompt");
+    if (!this.#lintPrompt && !this.#fixPrompt) {
+      throw new Error("AiPromptCheck requires at least one of: lintPrompt, fixPrompt");
     }
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
     this.#provider = new ClaudeProvider();
   }
   get name() {
-    const label = this.#prompt || this.#lintPrompt || this.#fixPrompt;
+    const label = this.#lintPrompt || this.#fixPrompt;
     return `AI Prompt (${label.slice(0, 50)}${label.length > 50 ? "\u2026" : ""})`;
   }
   checkDeps() {
@@ -1811,9 +1809,9 @@ var AiPromptCheck = class extends BaseCheck {
   }
   async lint(file, _deps) {
     const relFile = path7.relative(this.repoRoot, file);
-    const instruction = this.#lintPrompt || this.#prompt;
+    const instruction = this.#lintPrompt;
     if (!instruction) {
-      return { status: "error", output: "No prompt configured for lint (set prompt or lintPrompt)" };
+      return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
     const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
     const context = await this.#buildFileContext(promptFiles);
@@ -1857,9 +1855,9 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
   }
   async fix(file, _deps) {
     const relFile = path7.relative(this.repoRoot, file);
-    const instruction = this.#fixPrompt || this.#prompt;
+    const instruction = this.#fixPrompt;
     if (!instruction) {
-      return { status: "error", output: "No prompt configured for fix (set prompt or fixPrompt)" };
+      return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
     }
     const absFile = path7.resolve(file);
     const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
@@ -1983,7 +1981,7 @@ ${content}
     return {
       name: "AiPromptCheck",
       description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
-      options: "prompt \u2014 shared instruction for the AI (string or array); lintPrompt \u2014 lint-specific instruction (overrides prompt); fixPrompt \u2014 fix-specific instruction (overrides prompt); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false)"
+      options: "lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false)"
     };
   }
 };
@@ -6790,7 +6788,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "3d66243" : "unknown";
+var LINTER_COMMIT = true ? "d552ea0" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
