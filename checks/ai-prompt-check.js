@@ -1,5 +1,4 @@
 import { promises as fs } from "fs";
-import { createHash } from "crypto";
 import path from "path";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
@@ -77,11 +76,8 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock) {
-      const hash = this.#hash(context.value + "\n" + instruction);
-      if (await this.#lockMatches(relFile, hash)) {
-        return { status: "pass" };
-      }
+    if (this.#lock && await this.#lockMatches(relFile)) {
+      return { status: "pass" };
     }
 
     const prompt =
@@ -108,10 +104,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (verdict.pass) {
-      if (this.#lock) {
-        const hash = this.#hash(context.value + "\n" + instruction);
-        await this.#lockWrite(relFile, hash);
-      }
+      if (this.#lock) await this.#lockWrite(relFile);
       return { status: "pass" };
     }
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
@@ -132,11 +125,8 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock) {
-      const hash = this.#hash(context.value + "\n" + instruction);
-      if (await this.#lockMatches(relFile, hash)) {
-        return { status: "pass" };
-      }
+    if (this.#lock && await this.#lockMatches(relFile)) {
+      return { status: "pass" };
     }
 
     const prompt =
@@ -164,10 +154,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) {
-        const hash = this.#hash(context.value + "\n" + instruction);
-        await this.#lockWrite(relFile, hash);
-      }
+      if (this.#lock) await this.#lockWrite(relFile);
       return { status: "pass" };
     }
 
@@ -184,13 +171,7 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) {
-      const newContext = await this.#buildFileContext(filesToRead);
-      if (!newContext.error) {
-        const hash = this.#hash(newContext.value + "\n" + instruction);
-        await this.#lockWrite(relFile, hash);
-      }
-    }
+    if (this.#lock) await this.#lockWrite(relFile);
 
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
@@ -213,14 +194,8 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    // Check lock against all key variants so that files already verified by
-    // a prior lint() or fix() run are still recognised as cached.
-    if (this.#lock) {
-      const lintHash = this.#hash(context.value + "\n" + this.#lintPrompt);
-      const fixHash = this.#hash(context.value + "\n" + this.#fixPrompt);
-      if (await this.#lockMatches(relFile, lintHash) && await this.#lockMatches(relFile, fixHash)) {
-        return { status: "pass" };
-      }
+    if (this.#lock && await this.#lockMatches(relFile)) {
+      return { status: "pass" };
     }
 
     const prompt =
@@ -252,10 +227,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (result.pass) {
-      if (this.#lock) {
-        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#lintPrompt));
-        await this.#lockWrite(relFile, this.#hash(context.value + "\n" + this.#fixPrompt));
-      }
+      if (this.#lock) await this.#lockWrite(relFile);
       return { status: "pass" };
     }
 
@@ -276,13 +248,7 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) {
-      const newContext = await this.#buildFileContext(filesToRead);
-      if (!newContext.error) {
-        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#lintPrompt));
-        await this.#lockWrite(relFile, this.#hash(newContext.value + "\n" + this.#fixPrompt));
-      }
-    }
+    if (this.#lock) await this.#lockWrite(relFile);
 
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
@@ -309,10 +275,6 @@ export class AiPromptCheck extends BaseCheck {
       .replace(/\{dir\}/g, dir);
   }
 
-  #hash(content) {
-    return createHash("sha256").update(content).digest("hex");
-  }
-
   async #readLockfile() {
     const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
     try {
@@ -322,16 +284,16 @@ export class AiPromptCheck extends BaseCheck {
     }
   }
 
-  async #lockMatches(relFile, hash) {
+  async #lockMatches(relFile) {
     const lock = await this.#readLockfile();
-    return lock[this.name]?.[relFile] === hash;
+    return lock[this.name]?.[relFile] != null;
   }
 
-  async #lockWrite(relFile, hash) {
+  async #lockWrite(relFile) {
     const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
     const lock = await this.#readLockfile();
     if (!lock[this.name]) lock[this.name] = {};
-    lock[this.name][relFile] = hash;
+    lock[this.name][relFile] = 1;
     await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
   }
 
