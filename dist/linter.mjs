@@ -6879,7 +6879,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "bd94e3c" : "unknown";
+var LINTER_COMMIT = true ? "9c556e7" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7012,7 +7012,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
   });
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
-    return;
+    return { extraFiles: /* @__PURE__ */ new Set() };
   }
   console.log(`${lintOnly ? "Linting" : "Fixing"} ${totalChecks} check(s) across ${groupedWork.length} file(s)...`);
   let fail = false;

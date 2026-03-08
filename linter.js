@@ -202,7 +202,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
 
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
-    return;
+    return { extraFiles: new Set() };
   }
 
   console.log(`${lintOnly ? "Linting" : "Fixing"} ${totalChecks} check(s) across ${groupedWork.length} file(s)...`);
