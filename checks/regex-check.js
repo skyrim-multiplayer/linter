@@ -1,4 +1,5 @@
 import fs from "fs/promises";
+import path from "path";
 import { BaseCheck } from "./base-check.js";
 
 /**
@@ -8,6 +9,9 @@ import { BaseCheck } from "./base-check.js";
  *   pattern        — regex string to find violations (required)
  *   patternFlags   — regex flags (default: "g")
  *   replacement    — replacement string for fix mode (uses $1, $2, … groups)
+ *                    Supports templates: {name} (filename without ext),
+ *                    {basename} (filename with ext), {ext} (extension with dot),
+ *                    {dir} (directory relative to repo root).
  *   message        — error message shown on violation (default: "regex violation")
  *   skipLinePatterns — array of regex strings; matching lines are skipped
  *
@@ -51,6 +55,15 @@ export class RegexCheck extends BaseCheck {
     return this.#message;
   }
 
+  getTemplates() {
+    return {
+      "{name}":     (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
+      "{basename}": (ctx) => path.basename(ctx.file),
+      "{ext}":      (ctx) => path.extname(ctx.file),
+      "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
+    };
+  }
+
   async lint(file) {
     try {
       const content = await fs.readFile(file, "utf-8");
@@ -86,13 +99,17 @@ export class RegexCheck extends BaseCheck {
 
     try {
       const original = await fs.readFile(file, "utf-8");
+      const replacement = this.resolveTemplate(this.#replacement, {
+        file: path.resolve(file),
+        repoRoot: this.repoRoot,
+      });
 
       const lines = original.split("\n");
       const fixed = lines
         .map((line) => {
           if (this.#skipLineRes.some((re) => re.test(line))) return line;
           const re = new RegExp(this.#pattern.source, this.#pattern.flags);
-          return line.replace(re, this.#replacement);
+          return line.replace(re, replacement);
         })
         .join("\n");
 
@@ -116,7 +133,7 @@ export class RegexCheck extends BaseCheck {
       options:
         "pattern — regex to match violations (required)\n" +
         '    patternFlags — regex flags (default: "g")\n' +
-        "    replacement — replacement string for fix mode ($1, $2, … for groups)\n" +
+        "    replacement — replacement string for fix mode ($1, $2, … for groups; supports {name}/{basename}/{ext}/{dir} templates)\n" +
         '    message — error message (default: "regex violation")\n' +
         "    skipLinePatterns — array of regex strings; matching lines are skipped",
     };

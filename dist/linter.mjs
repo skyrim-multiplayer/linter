@@ -694,10 +694,10 @@ var require_src2 = __commonJS({
     var fs_1 = __require("fs");
     var debug_1 = __importDefault(require_src());
     var log = debug_1.default("@kwsites/file-exists");
-    function check(path13, isFile, isDirectory) {
-      log(`checking %s`, path13);
+    function check(path14, isFile, isDirectory) {
+      log(`checking %s`, path14);
       try {
-        const stat = fs_1.statSync(path13);
+        const stat = fs_1.statSync(path14);
         if (stat.isFile() && isFile) {
           log(`[OK] path represents a file`);
           return true;
@@ -717,8 +717,8 @@ var require_src2 = __commonJS({
         throw e;
       }
     }
-    function exists2(path13, type = exports.READABLE) {
-      return check(path13, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
+    function exists2(path14, type = exports.READABLE) {
+      return check(path14, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
     }
     exports.exists = exists2;
     exports.FILE = 1;
@@ -783,7 +783,7 @@ var require_dist2 = __commonJS({
 
 // linter.js
 import fs16 from "fs";
-import path12 from "path";
+import path13 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
 
@@ -2089,6 +2089,7 @@ ${content}
 
 // checks/regex-check.js
 import fs11 from "fs/promises";
+import path8 from "path";
 var RegexCheck = class extends BaseCheck {
   #pattern;
   #replacement;
@@ -2109,6 +2110,14 @@ var RegexCheck = class extends BaseCheck {
   }
   get name() {
     return this.#message;
+  }
+  getTemplates() {
+    return {
+      "{name}": (ctx) => path8.basename(ctx.file, path8.extname(ctx.file)),
+      "{basename}": (ctx) => path8.basename(ctx.file),
+      "{ext}": (ctx) => path8.extname(ctx.file),
+      "{dir}": (ctx) => path8.dirname(path8.relative(ctx.repoRoot, ctx.file))
+    };
   }
   async lint(file) {
     try {
@@ -2141,11 +2150,15 @@ ${violations.join("\n")}`
     }
     try {
       const original = await fs11.readFile(file, "utf-8");
+      const replacement = this.resolveTemplate(this.#replacement, {
+        file: path8.resolve(file),
+        repoRoot: this.repoRoot
+      });
       const lines = original.split("\n");
       const fixed = lines.map((line) => {
         if (this.#skipLineRes.some((re2) => re2.test(line))) return line;
         const re = new RegExp(this.#pattern.source, this.#pattern.flags);
-        return line.replace(re, this.#replacement);
+        return line.replace(re, replacement);
       }).join("\n");
       if (fixed !== original) {
         await fs11.writeFile(file, fixed, "utf-8");
@@ -2160,14 +2173,14 @@ ${violations.join("\n")}`
     return {
       name: "RegexCheck",
       description: "Generic regex-based check. Finds lines matching a pattern and optionally auto-fixes them using a replacement string. Fully configured via options in linter-config.json.",
-      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped'
+      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups; supports {name}/{basename}/{ext}/{dir} templates)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped'
     };
   }
 };
 
 // checks/firecrawl-check.js
 import { promises as fs12 } from "fs";
-import path8 from "path";
+import path9 from "path";
 var FirecrawlCheck = class extends BaseCheck {
   #outputFormat;
   #apiKey;
@@ -2220,13 +2233,13 @@ var FirecrawlCheck = class extends BaseCheck {
     if (!scraped) {
       return { status: "error", output: "Firecrawl returned empty content" };
     }
-    await fs12.writeFile(path8.resolve(file), scraped, "utf-8");
+    await fs12.writeFile(path9.resolve(file), scraped, "utf-8");
     return { status: "fixed", output: `scraped ${url.value}` };
   }
   async #extractUrl(file) {
     let content;
     try {
-      content = await fs12.readFile(path8.resolve(file), "utf-8");
+      content = await fs12.readFile(path9.resolve(file), "utf-8");
     } catch (err) {
       return { error: `cannot read file: ${err.message}` };
     }
@@ -2332,7 +2345,7 @@ var CompositeCheck = class extends BaseCheck {
 
 // file-sources/all-files-source.js
 import fs13 from "fs";
-import path9 from "path";
+import path10 from "path";
 
 // node_modules/simple-git/dist/esm/index.js
 var import_file_exists = __toESM(require_dist(), 1);
@@ -2406,8 +2419,8 @@ function pathspec(...paths) {
   cache.set(key, paths);
   return key;
 }
-function isPathSpec(path13) {
-  return path13 instanceof String && cache.has(path13);
+function isPathSpec(path14) {
+  return path14 instanceof String && cache.has(path14);
 }
 function toPaths(pathSpec) {
   return cache.get(pathSpec) || [];
@@ -2493,8 +2506,8 @@ function toLinesWithContent(input = "", trimmed2 = true, separator = "\n") {
 function forEachLineWithContent(input, callback) {
   return toLinesWithContent(input, true).map((line) => callback(line));
 }
-function folderExists(path13) {
-  return (0, import_file_exists.exists)(path13, import_file_exists.FOLDER);
+function folderExists(path14) {
+  return (0, import_file_exists.exists)(path14, import_file_exists.FOLDER);
 }
 function append(target, item) {
   if (Array.isArray(target)) {
@@ -2885,8 +2898,8 @@ function checkIsRepoRootTask() {
     commands,
     format: "utf-8",
     onError,
-    parser(path13) {
-      return /^\.(git)?$/.test(path13.trim());
+    parser(path14) {
+      return /^\.(git)?$/.test(path14.trim());
     }
   };
 }
@@ -3320,11 +3333,11 @@ function parseGrep(grep) {
   const paths = /* @__PURE__ */ new Set();
   const results = {};
   forEachLineWithContent(grep, (input) => {
-    const [path13, line, preview] = input.split(NULL);
-    paths.add(path13);
-    (results[path13] = results[path13] || []).push({
+    const [path14, line, preview] = input.split(NULL);
+    paths.add(path14);
+    (results[path14] = results[path14] || []).push({
       line: asNumber(line),
-      path: path13,
+      path: path14,
       preview
     });
   });
@@ -4087,14 +4100,14 @@ var init_hash_object = __esm({
     init_task();
   }
 });
-function parseInit(bare, path13, text) {
+function parseInit(bare, path14, text) {
   const response = String(text).trim();
   let result;
   if (result = initResponseRegex.exec(response)) {
-    return new InitSummary(bare, path13, false, result[1]);
+    return new InitSummary(bare, path14, false, result[1]);
   }
   if (result = reInitResponseRegex.exec(response)) {
-    return new InitSummary(bare, path13, true, result[1]);
+    return new InitSummary(bare, path14, true, result[1]);
   }
   let gitDir = "";
   const tokens = response.split(" ");
@@ -4105,7 +4118,7 @@ function parseInit(bare, path13, text) {
       break;
     }
   }
-  return new InitSummary(bare, path13, /^re/i.test(response), gitDir);
+  return new InitSummary(bare, path14, /^re/i.test(response), gitDir);
 }
 var InitSummary;
 var initResponseRegex;
@@ -4114,9 +4127,9 @@ var init_InitSummary = __esm({
   "src/lib/responses/InitSummary.ts"() {
     "use strict";
     InitSummary = class {
-      constructor(bare, path13, existing, gitDir) {
+      constructor(bare, path14, existing, gitDir) {
         this.bare = bare;
-        this.path = path13;
+        this.path = path14;
         this.existing = existing;
         this.gitDir = gitDir;
       }
@@ -4128,7 +4141,7 @@ var init_InitSummary = __esm({
 function hasBareCommand(command) {
   return command.includes(bareCommand);
 }
-function initTask(bare = false, path13, customArgs) {
+function initTask(bare = false, path14, customArgs) {
   const commands = ["init", ...customArgs];
   if (bare && !hasBareCommand(commands)) {
     commands.splice(1, 0, bareCommand);
@@ -4137,7 +4150,7 @@ function initTask(bare = false, path13, customArgs) {
     commands,
     format: "utf-8",
     parser(text) {
-      return parseInit(commands.includes("--bare"), path13, text);
+      return parseInit(commands.includes("--bare"), path14, text);
     }
   };
 }
@@ -4948,12 +4961,12 @@ var init_FileStatusSummary = __esm({
     "use strict";
     fromPathRegex = /^(.+)\0(.+)$/;
     FileStatusSummary = class {
-      constructor(path13, index, working_dir) {
-        this.path = path13;
+      constructor(path14, index, working_dir) {
+        this.path = path14;
         this.index = index;
         this.working_dir = working_dir;
         if (index === "R" || working_dir === "R") {
-          const detail = fromPathRegex.exec(path13) || [null, path13, path13];
+          const detail = fromPathRegex.exec(path14) || [null, path14, path14];
           this.from = detail[2] || "";
           this.path = detail[1] || "";
         }
@@ -4984,14 +4997,14 @@ function splitLine(result, lineStr) {
     default:
       return;
   }
-  function data(index, workingDir, path13) {
+  function data(index, workingDir, path14) {
     const raw = `${index}${workingDir}`;
     const handler = parsers6.get(raw);
     if (handler) {
-      handler(result, path13);
+      handler(result, path14);
     }
     if (raw !== "##" && raw !== "!!") {
-      result.files.push(new FileStatusSummary(path13, index, workingDir));
+      result.files.push(new FileStatusSummary(path14, index, workingDir));
     }
   }
 }
@@ -5303,9 +5316,9 @@ var init_simple_git_api = __esm({
           next
         );
       }
-      hashObject(path13, write) {
+      hashObject(path14, write) {
         return this._runTask(
-          hashObjectTask(path13, write === true),
+          hashObjectTask(path14, write === true),
           trailingFunctionArgument(arguments)
         );
       }
@@ -5959,8 +5972,8 @@ __export(sub_module_exports, {
   subModuleTask: () => subModuleTask,
   updateSubModuleTask: () => updateSubModuleTask
 });
-function addSubModuleTask(repo, path13) {
-  return subModuleTask(["add", repo, path13]);
+function addSubModuleTask(repo, path14) {
+  return subModuleTask(["add", repo, path14]);
 }
 function initSubModuleTask(customArgs) {
   return subModuleTask(["init", ...customArgs]);
@@ -6290,8 +6303,8 @@ var require_git = __commonJS2({
       }
       return this._runTask(straightThroughStringTask2(command, this._trimmed), next);
     };
-    Git2.prototype.submoduleAdd = function(repo, path13, then) {
-      return this._runTask(addSubModuleTask2(repo, path13), trailingFunctionArgument2(arguments));
+    Git2.prototype.submoduleAdd = function(repo, path14, then) {
+      return this._runTask(addSubModuleTask2(repo, path14), trailingFunctionArgument2(arguments));
     };
     Git2.prototype.submoduleUpdate = function(args, then) {
       return this._runTask(
@@ -6923,7 +6936,7 @@ var AllFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path9.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path10.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
@@ -6947,7 +6960,7 @@ var AllFilesSource = class extends BaseFileSource {
 
 // file-sources/staged-files-source.js
 import fs14 from "fs";
-import path10 from "path";
+import path11 from "path";
 var StagedFilesSource = class extends BaseFileSource {
   get name() {
     return "Staged files";
@@ -6955,7 +6968,7 @@ var StagedFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", "--cached"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path10.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path11.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
@@ -6979,7 +6992,7 @@ var StagedFilesSource = class extends BaseFileSource {
 
 // file-sources/diff-base-source.js
 import fs15 from "fs";
-import path11 from "path";
+import path12 from "path";
 var DiffBaseSource = class extends BaseFileSource {
   get name() {
     return "Diff vs base";
@@ -6989,7 +7002,7 @@ var DiffBaseSource = class extends BaseFileSource {
     console.log(`DiffBaseSource: diffing against ${baseRef}`);
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", baseRef]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path11.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path12.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
@@ -7054,9 +7067,9 @@ var builtinRegistry = {
 
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path12.dirname(__filename);
+var __dirname = path13.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "c219dad" : "unknown";
+var LINTER_COMMIT = true ? "8ffb693" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7081,9 +7094,9 @@ var resolveClass = async (entry) => {
   return Cls;
 };
 var loadConfig = async (mode) => {
-  const configPath = path12.join(REPO_ROOT, "linter-config.json");
+  const configPath = path13.join(REPO_ROOT, "linter-config.json");
   const config = JSON.parse(await fs16.promises.readFile(configPath, "utf-8"));
-  const toolsDir = config.toolsDir ? path12.resolve(REPO_ROOT, config.toolsDir) : path12.join(REPO_ROOT, "tools");
+  const toolsDir = config.toolsDir ? path13.resolve(REPO_ROOT, config.toolsDir) : path13.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
     throw new Error(`Unknown mode "${mode}". Available: ${Object.keys(config.modes).join(", ")}`);
@@ -7109,7 +7122,7 @@ var loadConfig = async (mode) => {
   return { fileSource, checks, toolsDir };
 };
 var relPath = (file) => {
-  if (file.startsWith(REPO_ROOT + path12.sep)) {
+  if (file.startsWith(REPO_ROOT + path13.sep)) {
     return file.slice(REPO_ROOT.length + 1);
   }
   return file;
@@ -7279,23 +7292,23 @@ var installHook = () => {
     console.error("Not a git repository. Cannot install hook.");
     process.exit(1);
   }
-  const hooksDir = path12.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
-  const hookPath = path12.join(hooksDir, "pre-commit");
-  const relLinterPath = path12.relative(REPO_ROOT, __filename);
+  const hooksDir = path13.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path13.join(hooksDir, "pre-commit");
+  const relLinterPath = path13.relative(REPO_ROOT, __filename);
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --mode hook
 `;
   if (fs16.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
     fs16.copyFileSync(hookPath, backup);
-    console.log(`Existing pre-commit hook backed up to ${path12.basename(backup)}`);
+    console.log(`Existing pre-commit hook backed up to ${path13.basename(backup)}`);
   }
   fs16.mkdirSync(hooksDir, { recursive: true });
   fs16.writeFileSync(hookPath, hookContent, { mode: 493 });
-  console.log(`Installed pre-commit hook at ${path12.relative(REPO_ROOT, hookPath)}`);
+  console.log(`Installed pre-commit hook at ${path13.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
-  const sep = path12.sep;
+  const sep = path13.sep;
   if (__filename.includes(`${sep}yarn${sep}global${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "yarn";
   }
@@ -7426,7 +7439,7 @@ var printHelp = () => {
   console.log(lines.join("\n"));
 };
 var initConfig = () => {
-  const configPath = path12.join(REPO_ROOT, "linter-config.json");
+  const configPath = path13.join(REPO_ROOT, "linter-config.json");
   if (fs16.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
@@ -7447,7 +7460,7 @@ var initConfig = () => {
     checks: checkEntries
   };
   fs16.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log(`Created ${path12.relative(REPO_ROOT, configPath)}`);
+  console.log(`Created ${path13.relative(REPO_ROOT, configPath)}`);
 };
 (async () => {
   const args = process.argv.slice(2);
