@@ -694,10 +694,10 @@ var require_src2 = __commonJS({
     var fs_1 = __require("fs");
     var debug_1 = __importDefault(require_src());
     var log = debug_1.default("@kwsites/file-exists");
-    function check(path12, isFile, isDirectory) {
-      log(`checking %s`, path12);
+    function check(path13, isFile, isDirectory) {
+      log(`checking %s`, path13);
       try {
-        const stat = fs_1.statSync(path12);
+        const stat = fs_1.statSync(path13);
         if (stat.isFile() && isFile) {
           log(`[OK] path represents a file`);
           return true;
@@ -717,8 +717,8 @@ var require_src2 = __commonJS({
         throw e;
       }
     }
-    function exists2(path12, type = exports.READABLE) {
-      return check(path12, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
+    function exists2(path13, type = exports.READABLE) {
+      return check(path13, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
     }
     exports.exists = exists2;
     exports.FILE = 1;
@@ -782,8 +782,8 @@ var require_dist2 = __commonJS({
 });
 
 // linter.js
-import fs15 from "fs";
-import path11 from "path";
+import fs16 from "fs";
+import path12 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
 
@@ -2165,6 +2165,127 @@ ${violations.join("\n")}`
   }
 };
 
+// checks/firecrawl-check.js
+import { promises as fs12 } from "fs";
+import path8 from "path";
+var FirecrawlCheck = class extends BaseCheck {
+  #outputFormat;
+  #apiKey;
+  #apiUrl;
+  #timeout;
+  constructor(repoRoot, options = {}) {
+    super(repoRoot, options);
+    this.#outputFormat = options.outputFormat || "markdown";
+    this.#apiKey = options.apiKey || null;
+    this.#apiUrl = (options.apiUrl || "https://api.firecrawl.dev").replace(/\/+$/, "");
+    this.#timeout = options.timeout ?? 6e4;
+  }
+  get name() {
+    return "Firecrawl";
+  }
+  checkDeps() {
+    return true;
+  }
+  async lint(file, _deps) {
+    const url = await this.#extractUrl(file);
+    if (url.error) {
+      return { status: "error", output: url.error };
+    }
+    if (url.isUrlOnly) {
+      return { status: "fail", output: `file contains unscraped URL: ${url.value} \u2014 run fix to scrape` };
+    }
+    return { status: "pass" };
+  }
+  async fix(file, _deps) {
+    const url = await this.#extractUrl(file);
+    if (url.error) {
+      return { status: "error", output: url.error };
+    }
+    if (!url.isUrlOnly) {
+      return { status: "pass" };
+    }
+    const apiKey = this.#resolveApiKey();
+    if (!apiKey) {
+      return {
+        status: "error",
+        output: "Firecrawl API key not configured. Set apiKey in check options or FIRECRAWL_API_KEY env var."
+      };
+    }
+    let scraped;
+    try {
+      scraped = await this.#scrape(url.value, apiKey);
+    } catch (err) {
+      return { status: "error", output: `Firecrawl API error: ${err.message}` };
+    }
+    if (!scraped) {
+      return { status: "error", output: "Firecrawl returned empty content" };
+    }
+    await fs12.writeFile(path8.resolve(file), scraped, "utf-8");
+    return { status: "fixed", output: `scraped ${url.value}` };
+  }
+  async #extractUrl(file) {
+    let content;
+    try {
+      content = await fs12.readFile(path8.resolve(file), "utf-8");
+    } catch (err) {
+      return { error: `cannot read file: ${err.message}` };
+    }
+    const trimmed2 = content.trim();
+    if (!trimmed2) {
+      return { error: "file is empty" };
+    }
+    const firstLine = trimmed2.split(/\r?\n/)[0].trim();
+    try {
+      const parsed = new URL(firstLine);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return { error: `unsupported protocol: ${parsed.protocol}` };
+      }
+    } catch {
+      return { isUrlOnly: false, value: firstLine };
+    }
+    const isUrlOnly = trimmed2 === firstLine;
+    return { isUrlOnly, value: firstLine };
+  }
+  #resolveApiKey() {
+    return this.#apiKey || process.env.FIRECRAWL_API_KEY || null;
+  }
+  async #scrape(url, apiKey) {
+    const endpoint = `${this.#apiUrl}/v1/scrape`;
+    const formats = this.#outputFormat === "html" ? ["html"] : ["markdown"];
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), this.#timeout);
+    try {
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ url, formats }),
+        signal: controller.signal
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}: ${body.slice(0, 500)}`);
+      }
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || "scrape unsuccessful");
+      }
+      return this.#outputFormat === "html" ? data.data?.html : data.data?.markdown;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  static getHelp() {
+    return {
+      name: "FirecrawlCheck",
+      description: "Scrapes a URL found in a file using the Firecrawl API and writes the result back. Fix-only: lint reports whether the file still contains an unscraped URL.",
+      options: "outputFormat \u2014 'markdown' (default) or 'html'; apiKey \u2014 Firecrawl API key (falls back to FIRECRAWL_API_KEY env var); apiUrl \u2014 Firecrawl API base URL (default: https://api.firecrawl.dev); timeout \u2014 request timeout in ms (default: 60000)"
+    };
+  }
+};
+
 // checks/composite-check.js
 var CompositeCheck = class extends BaseCheck {
   #linter;
@@ -2210,8 +2331,8 @@ var CompositeCheck = class extends BaseCheck {
 };
 
 // file-sources/all-files-source.js
-import fs12 from "fs";
-import path8 from "path";
+import fs13 from "fs";
+import path9 from "path";
 
 // node_modules/simple-git/dist/esm/index.js
 var import_file_exists = __toESM(require_dist(), 1);
@@ -2285,8 +2406,8 @@ function pathspec(...paths) {
   cache.set(key, paths);
   return key;
 }
-function isPathSpec(path12) {
-  return path12 instanceof String && cache.has(path12);
+function isPathSpec(path13) {
+  return path13 instanceof String && cache.has(path13);
 }
 function toPaths(pathSpec) {
   return cache.get(pathSpec) || [];
@@ -2372,8 +2493,8 @@ function toLinesWithContent(input = "", trimmed2 = true, separator = "\n") {
 function forEachLineWithContent(input, callback) {
   return toLinesWithContent(input, true).map((line) => callback(line));
 }
-function folderExists(path12) {
-  return (0, import_file_exists.exists)(path12, import_file_exists.FOLDER);
+function folderExists(path13) {
+  return (0, import_file_exists.exists)(path13, import_file_exists.FOLDER);
 }
 function append(target, item) {
   if (Array.isArray(target)) {
@@ -2764,8 +2885,8 @@ function checkIsRepoRootTask() {
     commands,
     format: "utf-8",
     onError,
-    parser(path12) {
-      return /^\.(git)?$/.test(path12.trim());
+    parser(path13) {
+      return /^\.(git)?$/.test(path13.trim());
     }
   };
 }
@@ -3199,11 +3320,11 @@ function parseGrep(grep) {
   const paths = /* @__PURE__ */ new Set();
   const results = {};
   forEachLineWithContent(grep, (input) => {
-    const [path12, line, preview] = input.split(NULL);
-    paths.add(path12);
-    (results[path12] = results[path12] || []).push({
+    const [path13, line, preview] = input.split(NULL);
+    paths.add(path13);
+    (results[path13] = results[path13] || []).push({
       line: asNumber(line),
-      path: path12,
+      path: path13,
       preview
     });
   });
@@ -3966,14 +4087,14 @@ var init_hash_object = __esm({
     init_task();
   }
 });
-function parseInit(bare, path12, text) {
+function parseInit(bare, path13, text) {
   const response = String(text).trim();
   let result;
   if (result = initResponseRegex.exec(response)) {
-    return new InitSummary(bare, path12, false, result[1]);
+    return new InitSummary(bare, path13, false, result[1]);
   }
   if (result = reInitResponseRegex.exec(response)) {
-    return new InitSummary(bare, path12, true, result[1]);
+    return new InitSummary(bare, path13, true, result[1]);
   }
   let gitDir = "";
   const tokens = response.split(" ");
@@ -3984,7 +4105,7 @@ function parseInit(bare, path12, text) {
       break;
     }
   }
-  return new InitSummary(bare, path12, /^re/i.test(response), gitDir);
+  return new InitSummary(bare, path13, /^re/i.test(response), gitDir);
 }
 var InitSummary;
 var initResponseRegex;
@@ -3993,9 +4114,9 @@ var init_InitSummary = __esm({
   "src/lib/responses/InitSummary.ts"() {
     "use strict";
     InitSummary = class {
-      constructor(bare, path12, existing, gitDir) {
+      constructor(bare, path13, existing, gitDir) {
         this.bare = bare;
-        this.path = path12;
+        this.path = path13;
         this.existing = existing;
         this.gitDir = gitDir;
       }
@@ -4007,7 +4128,7 @@ var init_InitSummary = __esm({
 function hasBareCommand(command) {
   return command.includes(bareCommand);
 }
-function initTask(bare = false, path12, customArgs) {
+function initTask(bare = false, path13, customArgs) {
   const commands = ["init", ...customArgs];
   if (bare && !hasBareCommand(commands)) {
     commands.splice(1, 0, bareCommand);
@@ -4016,7 +4137,7 @@ function initTask(bare = false, path12, customArgs) {
     commands,
     format: "utf-8",
     parser(text) {
-      return parseInit(commands.includes("--bare"), path12, text);
+      return parseInit(commands.includes("--bare"), path13, text);
     }
   };
 }
@@ -4827,12 +4948,12 @@ var init_FileStatusSummary = __esm({
     "use strict";
     fromPathRegex = /^(.+)\0(.+)$/;
     FileStatusSummary = class {
-      constructor(path12, index, working_dir) {
-        this.path = path12;
+      constructor(path13, index, working_dir) {
+        this.path = path13;
         this.index = index;
         this.working_dir = working_dir;
         if (index === "R" || working_dir === "R") {
-          const detail = fromPathRegex.exec(path12) || [null, path12, path12];
+          const detail = fromPathRegex.exec(path13) || [null, path13, path13];
           this.from = detail[2] || "";
           this.path = detail[1] || "";
         }
@@ -4863,14 +4984,14 @@ function splitLine(result, lineStr) {
     default:
       return;
   }
-  function data(index, workingDir, path12) {
+  function data(index, workingDir, path13) {
     const raw = `${index}${workingDir}`;
     const handler = parsers6.get(raw);
     if (handler) {
-      handler(result, path12);
+      handler(result, path13);
     }
     if (raw !== "##" && raw !== "!!") {
-      result.files.push(new FileStatusSummary(path12, index, workingDir));
+      result.files.push(new FileStatusSummary(path13, index, workingDir));
     }
   }
 }
@@ -5182,9 +5303,9 @@ var init_simple_git_api = __esm({
           next
         );
       }
-      hashObject(path12, write) {
+      hashObject(path13, write) {
         return this._runTask(
-          hashObjectTask(path12, write === true),
+          hashObjectTask(path13, write === true),
           trailingFunctionArgument(arguments)
         );
       }
@@ -5838,8 +5959,8 @@ __export(sub_module_exports, {
   subModuleTask: () => subModuleTask,
   updateSubModuleTask: () => updateSubModuleTask
 });
-function addSubModuleTask(repo, path12) {
-  return subModuleTask(["add", repo, path12]);
+function addSubModuleTask(repo, path13) {
+  return subModuleTask(["add", repo, path13]);
 }
 function initSubModuleTask(customArgs) {
   return subModuleTask(["init", ...customArgs]);
@@ -6169,8 +6290,8 @@ var require_git = __commonJS2({
       }
       return this._runTask(straightThroughStringTask2(command, this._trimmed), next);
     };
-    Git2.prototype.submoduleAdd = function(repo, path12, then) {
-      return this._runTask(addSubModuleTask2(repo, path12), trailingFunctionArgument2(arguments));
+    Git2.prototype.submoduleAdd = function(repo, path13, then) {
+      return this._runTask(addSubModuleTask2(repo, path13), trailingFunctionArgument2(arguments));
     };
     Git2.prototype.submoduleUpdate = function(args, then) {
       return this._runTask(
@@ -6802,11 +6923,11 @@ var AllFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path8.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path9.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs12.promises.access(filePath, fs12.constants.F_OK);
+          await fs13.promises.access(filePath, fs13.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6825,8 +6946,8 @@ var AllFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/staged-files-source.js
-import fs13 from "fs";
-import path9 from "path";
+import fs14 from "fs";
+import path10 from "path";
 var StagedFilesSource = class extends BaseFileSource {
   get name() {
     return "Staged files";
@@ -6834,11 +6955,11 @@ var StagedFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", "--cached"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path9.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path10.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs13.promises.access(filePath, fs13.constants.F_OK);
+          await fs14.promises.access(filePath, fs14.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6857,8 +6978,8 @@ var StagedFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/diff-base-source.js
-import fs14 from "fs";
-import path10 from "path";
+import fs15 from "fs";
+import path11 from "path";
 var DiffBaseSource = class extends BaseFileSource {
   get name() {
     return "Diff vs base";
@@ -6868,11 +6989,11 @@ var DiffBaseSource = class extends BaseFileSource {
     console.log(`DiffBaseSource: diffing against ${baseRef}`);
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", baseRef]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path10.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path11.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs14.promises.access(filePath, fs14.constants.F_OK);
+          await fs15.promises.access(filePath, fs15.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -6918,6 +7039,7 @@ var builtinChecks = {
   CodegenCheck,
   AiPromptCheck,
   RegexCheck,
+  FirecrawlCheck,
   CompositeCheck
 };
 var builtinFileSources = {
@@ -6932,9 +7054,9 @@ var builtinRegistry = {
 
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path11.dirname(__filename);
+var __dirname = path12.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "5d0391a" : "unknown";
+var LINTER_COMMIT = true ? "c219dad" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6959,9 +7081,9 @@ var resolveClass = async (entry) => {
   return Cls;
 };
 var loadConfig = async (mode) => {
-  const configPath = path11.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(await fs15.promises.readFile(configPath, "utf-8"));
-  const toolsDir = config.toolsDir ? path11.resolve(REPO_ROOT, config.toolsDir) : path11.join(REPO_ROOT, "tools");
+  const configPath = path12.join(REPO_ROOT, "linter-config.json");
+  const config = JSON.parse(await fs16.promises.readFile(configPath, "utf-8"));
+  const toolsDir = config.toolsDir ? path12.resolve(REPO_ROOT, config.toolsDir) : path12.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
     throw new Error(`Unknown mode "${mode}". Available: ${Object.keys(config.modes).join(", ")}`);
@@ -6987,7 +7109,7 @@ var loadConfig = async (mode) => {
   return { fileSource, checks, toolsDir };
 };
 var relPath = (file) => {
-  if (file.startsWith(REPO_ROOT + path11.sep)) {
+  if (file.startsWith(REPO_ROOT + path12.sep)) {
     return file.slice(REPO_ROOT.length + 1);
   }
   return file;
@@ -7157,23 +7279,23 @@ var installHook = () => {
     console.error("Not a git repository. Cannot install hook.");
     process.exit(1);
   }
-  const hooksDir = path11.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
-  const hookPath = path11.join(hooksDir, "pre-commit");
-  const relLinterPath = path11.relative(REPO_ROOT, __filename);
+  const hooksDir = path12.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path12.join(hooksDir, "pre-commit");
+  const relLinterPath = path12.relative(REPO_ROOT, __filename);
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --mode hook
 `;
-  if (fs15.existsSync(hookPath)) {
+  if (fs16.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
-    fs15.copyFileSync(hookPath, backup);
-    console.log(`Existing pre-commit hook backed up to ${path11.basename(backup)}`);
+    fs16.copyFileSync(hookPath, backup);
+    console.log(`Existing pre-commit hook backed up to ${path12.basename(backup)}`);
   }
-  fs15.mkdirSync(hooksDir, { recursive: true });
-  fs15.writeFileSync(hookPath, hookContent, { mode: 493 });
-  console.log(`Installed pre-commit hook at ${path11.relative(REPO_ROOT, hookPath)}`);
+  fs16.mkdirSync(hooksDir, { recursive: true });
+  fs16.writeFileSync(hookPath, hookContent, { mode: 493 });
+  console.log(`Installed pre-commit hook at ${path12.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
-  const sep = path11.sep;
+  const sep = path12.sep;
   if (__filename.includes(`${sep}yarn${sep}global${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "yarn";
   }
@@ -7230,20 +7352,20 @@ var upgrade = () => {
         );
       } catch {
         try {
-          fs15.unlinkSync(tmpPath);
+          fs16.unlinkSync(tmpPath);
         } catch {
         }
         console.error("Download failed.");
         process.exit(1);
       }
-      const head = fs15.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      const head = fs16.readFileSync(tmpPath, "utf-8").slice(0, 100);
       if (!head.startsWith("#!/")) {
-        fs15.unlinkSync(tmpPath);
+        fs16.unlinkSync(tmpPath);
         console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
         process.exit(1);
       }
-      fs15.renameSync(tmpPath, __filename);
-      fs15.chmodSync(__filename, 493);
+      fs16.renameSync(tmpPath, __filename);
+      fs16.chmodSync(__filename, 493);
       console.log(`Updated ${__filename}`);
       try {
         execSync(`node "${__filename}" --version`, { stdio: "inherit" });
@@ -7304,8 +7426,8 @@ var printHelp = () => {
   console.log(lines.join("\n"));
 };
 var initConfig = () => {
-  const configPath = path11.join(REPO_ROOT, "linter-config.json");
-  if (fs15.existsSync(configPath)) {
+  const configPath = path12.join(REPO_ROOT, "linter-config.json");
+  if (fs16.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
   }
@@ -7324,8 +7446,8 @@ var initConfig = () => {
     },
     checks: checkEntries
   };
-  fs15.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log(`Created ${path11.relative(REPO_ROOT, configPath)}`);
+  fs16.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log(`Created ${path12.relative(REPO_ROOT, configPath)}`);
 };
 (async () => {
   const args = process.argv.slice(2);
