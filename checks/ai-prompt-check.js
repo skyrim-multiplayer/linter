@@ -3,14 +3,21 @@ import path from "path";
 import { createHash } from "crypto";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
+import { GeminiProvider } from "../ai-providers/gemini.js";
+
+const AI_PROVIDERS = {
+  claude: ClaudeProvider,
+  gemini: GeminiProvider,
+};
 
 const LOCKFILE_NAME = ".ai-prompt-lock.json";
 
 /**
- * AI Prompt check — invokes the Claude CLI (`claude --print`) in a
+ * AI Prompt check — invokes an AI CLI (Claude or Gemini) in a
  * text-only workflow.
  *
  * Options (from linter-config.json):
+ *   aiProvider     — which AI provider to use: "claude" (default) or "gemini"
  *   lintPrompt     — lint-specific instruction
  *   fixPrompt      — fix-specific instruction
  *   filesToRead    — additional files to include as context (array of paths)
@@ -24,11 +31,11 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *                    universal lock entries instead of file hashes.
  *
  * Lint mode:
- *   Pipes selected file contents + prompt to `claude --print` and asks for a
+ *   Pipes selected file contents + prompt to the AI CLI and asks for a
  *   JSON verdict: { "pass": true/false, "reason": "..." }
  *
  * Fix mode:
- *   Sends selected file contents to `claude --print` and expects JSON with
+ *   Sends selected file contents to the AI CLI and expects JSON with
  *   updated content for allowed files only. This check applies edits itself.
  */
 export class AiPromptCheck extends BaseCheck {
@@ -57,7 +64,13 @@ export class AiPromptCheck extends BaseCheck {
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
     this.#lockValue = options.lockValue;
-    this.#provider = new ClaudeProvider();
+
+    const providerName = (options.aiProvider || "claude").toLowerCase();
+    const ProviderClass = AI_PROVIDERS[providerName];
+    if (!ProviderClass) {
+      throw new Error(`Unknown aiProvider "${providerName}". Available: ${Object.keys(AI_PROVIDERS).join(", ")}`);
+    }
+    this.#provider = new ProviderClass();
   }
 
   get name() {
@@ -107,7 +120,7 @@ export class AiPromptCheck extends BaseCheck {
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
 
     let verdict;
@@ -115,7 +128,7 @@ export class AiPromptCheck extends BaseCheck {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       verdict = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
     if (verdict.pass) {
@@ -157,7 +170,7 @@ export class AiPromptCheck extends BaseCheck {
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
 
     let result;
@@ -165,7 +178,7 @@ export class AiPromptCheck extends BaseCheck {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
     if (!result.changed || typeof result.content !== "string") {
@@ -230,7 +243,7 @@ export class AiPromptCheck extends BaseCheck {
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
 
     let result;
@@ -238,7 +251,7 @@ export class AiPromptCheck extends BaseCheck {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
     if (result.pass) {
@@ -346,9 +359,10 @@ export class AiPromptCheck extends BaseCheck {
     return {
       name: "AiPromptCheck",
       description:
-        "Invokes the Claude CLI with a user-defined prompt. " +
-        "Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
+        "Invokes an AI CLI (Claude or Gemini) with a user-defined prompt. " +
+        "Lint asks the AI to evaluate pass/fail. Fix asks the AI for updated file content and applies it.",
       options:
+        "aiProvider — which AI provider to use: 'claude' (default) or 'gemini'; " +
         "lintPrompt — lint-specific instruction (string or array); " +
         "fixPrompt — fix-specific instruction (string or array); " +
         "filesToRead — additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); " +

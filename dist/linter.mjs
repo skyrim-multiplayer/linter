@@ -1816,7 +1816,70 @@ var ClaudeProvider = class extends BaseAiProvider {
   }
 };
 
+// ai-providers/gemini.js
+import { spawn as spawn2 } from "child_process";
+var GeminiProvider = class extends BaseAiProvider {
+  get name() {
+    return "Gemini CLI";
+  }
+  checkDeps() {
+    return true;
+  }
+  /**
+   * Send a prompt to `gemini` via stdin and return the response.
+   * The Gemini CLI detects non-TTY stdin and uses it as a headless prompt.
+   * @param {string} prompt
+   * @param {{ cwd?: string }} options
+   * @returns {Promise<string>}
+   */
+  async call(prompt, options = {}) {
+    return new Promise((resolve, reject) => {
+      const proc = spawn2("gemini", [], {
+        cwd: options.cwd,
+        stdio: ["pipe", "pipe", "pipe"]
+      });
+      let stdout = "";
+      let stderr = "";
+      proc.stdout.on("data", (data) => {
+        stdout += data;
+      });
+      proc.stderr.on("data", (data) => {
+        stderr += data;
+      });
+      proc.on("error", (err) => {
+        if (err.code === "ENOENT") {
+          reject(new Error("gemini CLI not found on PATH"));
+        } else {
+          reject(err);
+        }
+      });
+      proc.on("close", (code) => {
+        if (code !== 0) {
+          const parts = [`gemini exited with code ${code}`];
+          if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+          if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+          reject(new Error(parts.join("\n")));
+          return;
+        }
+        resolve(stdout.trim());
+      });
+      proc.stdin.write(prompt);
+      proc.stdin.end();
+    });
+  }
+  static getHelp() {
+    return {
+      name: "GeminiProvider",
+      description: "Invokes the Gemini CLI (gemini) to get AI responses via stdin in headless mode."
+    };
+  }
+};
+
 // checks/ai-prompt-check.js
+var AI_PROVIDERS = {
+  claude: ClaudeProvider,
+  gemini: GeminiProvider
+};
 var LOCKFILE_NAME = ".ai-prompt-lock.json";
 var AiPromptCheck = class extends BaseCheck {
   #lintPrompt;
@@ -1840,7 +1903,12 @@ var AiPromptCheck = class extends BaseCheck {
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
     this.#lockValue = options.lockValue;
-    this.#provider = new ClaudeProvider();
+    const providerName = (options.aiProvider || "claude").toLowerCase();
+    const ProviderClass = AI_PROVIDERS[providerName];
+    if (!ProviderClass) {
+      throw new Error(`Unknown aiProvider "${providerName}". Available: ${Object.keys(AI_PROVIDERS).join(", ")}`);
+    }
+    this.#provider = new ProviderClass();
   }
   get name() {
     const label = this.#lintPrompt || this.#fixPrompt;
@@ -1882,14 +1950,14 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
     let verdict;
     try {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       verdict = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
     if (verdict.pass) {
       if (this.#lock) await this.#lockWrite(relFile, file);
@@ -1923,14 +1991,14 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
     let result;
     try {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
     if (!result.changed || typeof result.content !== "string") {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
@@ -1986,14 +2054,14 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     try {
       reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `Claude CLI error: ${err.message}` };
+      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
     }
     let result;
     try {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
       result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
     } catch {
-      return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
+      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
     if (result.pass) {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
@@ -2081,8 +2149,8 @@ ${content}
   static getHelp() {
     return {
       name: "AiPromptCheck",
-      description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
-      options: "lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
+      description: "Invokes an AI CLI (Claude or Gemini) with a user-defined prompt. Lint asks the AI to evaluate pass/fail. Fix asks the AI for updated file content and applies it.",
+      options: "aiProvider \u2014 which AI provider to use: 'claude' (default) or 'gemini'; lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
     };
   }
 };
@@ -2370,7 +2438,7 @@ var import_file_exists = __toESM(require_dist(), 1);
 var import_debug = __toESM(require_src(), 1);
 var import_promise_deferred = __toESM(require_dist2(), 1);
 var import_promise_deferred2 = __toESM(require_dist2(), 1);
-import { spawn as spawn2 } from "child_process";
+import { spawn as spawn3 } from "child_process";
 import { EventEmitter } from "node:events";
 var __defProp2 = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -3780,7 +3848,7 @@ var init_git_executor_chain = __esm({
                 rejection = reason || rejection;
               }
             }));
-            const spawned = spawn2(command, args, spawnOptions);
+            const spawned = spawn3(command, args, spawnOptions);
             spawned.stdout.on(
               "data",
               onDataReceived(stdOut, "stdOut", logger, outputLogger.step("stdOut"))
@@ -7087,7 +7155,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path13.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "94b8ed4" : "unknown";
+var LINTER_COMMIT = true ? "7f40922" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
