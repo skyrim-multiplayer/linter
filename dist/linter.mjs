@@ -2120,6 +2120,50 @@ ${violations.join("\n")}`
   }
 };
 
+// checks/composite-check.js
+var CompositeCheck = class extends BaseCheck {
+  #linter;
+  #fixer;
+  constructor(linter, fixer) {
+    super(linter.repoRoot);
+    this.#linter = linter;
+    this.#fixer = fixer;
+  }
+  get name() {
+    return this.#linter.name;
+  }
+  get priority() {
+    return this.#linter.priority;
+  }
+  async appliesTo(file) {
+    return this.#linter.appliesTo(file);
+  }
+  checkDeps(deps) {
+    return this.#linter.checkDeps(deps) && this.#fixer.checkDeps(deps);
+  }
+  async resolveDeps(options) {
+    const a = await this.#linter.resolveDeps(options);
+    const b = await this.#fixer.resolveDeps(options);
+    return { ...a, ...b };
+  }
+  async lint(file, deps) {
+    return this.#linter.lint(file, deps);
+  }
+  async fix(file, deps) {
+    return this.#fixer.fix(file, deps);
+  }
+  async lintAndFix() {
+    return null;
+  }
+  static getHelp() {
+    return {
+      name: "CompositeCheck",
+      description: 'Composes two checks: one for linting and another for fixing. Created automatically when a config entry includes a "fixWith" block.',
+      options: "N/A \u2014 configured via fixWith in linter-config.json"
+    };
+  }
+};
+
 // file-sources/all-files-source.js
 import fs12 from "fs";
 import path8 from "path";
@@ -6828,7 +6872,8 @@ var builtinChecks = {
   PairedFilesCheck,
   CodegenCheck,
   AiPromptCheck,
-  RegexCheck
+  RegexCheck,
+  CompositeCheck
 };
 var builtinFileSources = {
   AllFilesSource,
@@ -6844,7 +6889,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "c6fdacf" : "unknown";
+var LINTER_COMMIT = true ? "65bcdd0" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -6886,7 +6931,13 @@ var loadConfig = async (mode) => {
       continue;
     }
     const CheckClass = await resolveClass(entry);
-    checks.push(new CheckClass(REPO_ROOT, entry.options || {}));
+    let check = new CheckClass(REPO_ROOT, entry.options || {});
+    if (entry.fixWith) {
+      const FixClass = await resolveClass(entry.fixWith);
+      const fixer = new FixClass(REPO_ROOT, { ...entry.options, ...entry.fixWith.options });
+      check = new CompositeCheck(check, fixer);
+    }
+    checks.push(check);
   }
   return { fileSource, checks, toolsDir };
 };

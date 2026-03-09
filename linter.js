@@ -6,6 +6,7 @@ import pLimit from "p-limit";
 
 import { ensureCleanExit } from "./util.js";
 import { builtinRegistry, builtinChecks, builtinFileSources } from "./registry.js";
+import { CompositeCheck } from "./checks/composite-check.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -74,7 +75,13 @@ const loadConfig = async (mode) => {
       continue;
     }
     const CheckClass = await resolveClass(entry);
-    checks.push(new CheckClass(REPO_ROOT, entry.options || {}));
+    let check = new CheckClass(REPO_ROOT, entry.options || {});
+    if (entry.fixWith) {
+      const FixClass = await resolveClass(entry.fixWith);
+      const fixer = new FixClass(REPO_ROOT, { ...entry.options, ...entry.fixWith.options });
+      check = new CompositeCheck(check, fixer);
+    }
+    checks.push(check);
   }
 
   return { fileSource, checks, toolsDir };
