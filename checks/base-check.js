@@ -156,6 +156,31 @@ export class BaseCheck {
   }
 
   /**
+   * Return template placeholders this check supports.
+   * Keys are placeholder strings, values are functions (context) => replacement.
+   * Subclasses override to provide their own templates.
+   * @param {object} [context] - Contextual info (e.g. { file, repoRoot }).
+   * @returns {Record<string, (ctx: object) => string>}
+   */
+  getTemplates() {
+    return {};
+  }
+
+  /**
+   * Expand all placeholders from getTemplates() in the given string.
+   * @param {string} template - String containing placeholders.
+   * @param {object} context  - Passed to each template function.
+   * @returns {string}
+   */
+  resolveTemplate(template, context) {
+    let result = template;
+    for (const [placeholder, fn] of Object.entries(this.getTemplates())) {
+      result = result.replaceAll(placeholder, fn(context));
+    }
+    return result;
+  }
+
+  /**
    * Return help info for this check class.
    * Subclasses should override to provide specific details.
    * @returns {{ name: string, description: string, options: string }}

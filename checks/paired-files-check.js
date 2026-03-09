@@ -39,6 +39,12 @@ export class PairedFilesCheck extends BaseCheck {
     return "Paired Files Check";
   }
 
+  getTemplates() {
+    return {
+      "{{basename}}": (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
+    };
+  }
+
   async appliesTo(file) {
     if (!(await super.appliesTo(file))) return false;
     const basename = path.basename(file).toLowerCase();
@@ -100,7 +106,7 @@ export class PairedFilesCheck extends BaseCheck {
       return { status: "fail", output: `pair file not found (expected ${expected} in ${pairDir.abs})` };
     }
 
-    const content = pairDir.template.replaceAll("{{basename}}", baseName);
+    const content = this.resolveTemplate(pairDir.template, { file });
     try {
       await fs.writeFile(pairPath, content);
     } catch (err) {

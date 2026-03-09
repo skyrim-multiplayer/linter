@@ -1074,6 +1074,29 @@ var BaseCheck = class {
     return null;
   }
   /**
+   * Return template placeholders this check supports.
+   * Keys are placeholder strings, values are functions (context) => replacement.
+   * Subclasses override to provide their own templates.
+   * @param {object} [context] - Contextual info (e.g. { file, repoRoot }).
+   * @returns {Record<string, (ctx: object) => string>}
+   */
+  getTemplates() {
+    return {};
+  }
+  /**
+   * Expand all placeholders from getTemplates() in the given string.
+   * @param {string} template - String containing placeholders.
+   * @param {object} context  - Passed to each template function.
+   * @returns {string}
+   */
+  resolveTemplate(template, context) {
+    let result = template;
+    for (const [placeholder, fn] of Object.entries(this.getTemplates())) {
+      result = result.replaceAll(placeholder, fn(context));
+    }
+    return result;
+  }
+  /**
    * Return help info for this check class.
    * Subclasses should override to provide specific details.
    * @returns {{ name: string, description: string, options: string }}
@@ -1525,6 +1548,11 @@ var PairedFilesCheck = class extends BaseCheck {
   get name() {
     return "Paired Files Check";
   }
+  getTemplates() {
+    return {
+      "{{basename}}": (ctx) => path5.basename(ctx.file, path5.extname(ctx.file))
+    };
+  }
   async appliesTo(file) {
     if (!await super.appliesTo(file)) return false;
     const basename = path5.basename(file).toLowerCase();
@@ -1573,7 +1601,7 @@ var PairedFilesCheck = class extends BaseCheck {
     if (!pairDir.template) {
       return { status: "fail", output: `pair file not found (expected ${expected} in ${pairDir.abs})` };
     }
-    const content = pairDir.template.replaceAll("{{basename}}", baseName);
+    const content = this.resolveTemplate(pairDir.template, { file });
     try {
       await fs8.writeFile(pairPath, content);
     } catch (err) {
@@ -1818,6 +1846,14 @@ var AiPromptCheck = class extends BaseCheck {
   checkDeps() {
     return true;
   }
+  getTemplates() {
+    return {
+      "{name}": (ctx) => path7.basename(ctx.file, path7.extname(ctx.file)),
+      "{basename}": (ctx) => path7.basename(ctx.file),
+      "{ext}": (ctx) => path7.extname(ctx.file),
+      "{dir}": (ctx) => path7.dirname(path7.relative(ctx.repoRoot, ctx.file))
+    };
+  }
   async lint(file, _deps) {
     const relFile = path7.relative(this.repoRoot, file);
     const instruction = this.#lintPrompt;
@@ -1978,19 +2014,10 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
   }
   #resolvePaths(paths, file) {
     return paths.map((p) => {
-      const expanded = file ? this.#expandTemplate(p, file) : p;
+      const expanded = file ? this.resolveTemplate(p, { file: path7.resolve(file), repoRoot: this.repoRoot }) : p;
       const candidate = path7.isAbsolute(expanded) ? expanded : path7.resolve(this.repoRoot, expanded);
       return path7.resolve(candidate);
     });
-  }
-  #expandTemplate(template, file) {
-    const absFile = path7.resolve(file);
-    const rel = path7.relative(this.repoRoot, absFile);
-    const ext = path7.extname(rel);
-    const basename = path7.basename(rel);
-    const name = path7.basename(rel, ext);
-    const dir = path7.dirname(rel);
-    return template.replace(/\{name\}/g, name).replace(/\{basename\}/g, basename).replace(/\{ext\}/g, ext).replace(/\{dir\}/g, dir);
   }
   async #readLockfile() {
     const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
@@ -6889,7 +6916,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "65bcdd0" : "unknown";
+var LINTER_COMMIT = true ? "45f8fc7" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

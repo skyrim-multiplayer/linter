@@ -63,6 +63,15 @@ export class AiPromptCheck extends BaseCheck {
     return true;
   }
 
+  getTemplates() {
+    return {
+      "{name}":     (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
+      "{basename}": (ctx) => path.basename(ctx.file),
+      "{ext}":      (ctx) => path.extname(ctx.file),
+      "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
+    };
+  }
+
   async lint(file, _deps) {
     const relFile = path.relative(this.repoRoot, file);
     const instruction = this.#lintPrompt;
@@ -255,24 +264,12 @@ export class AiPromptCheck extends BaseCheck {
 
   #resolvePaths(paths, file) {
     return paths.map((p) => {
-      const expanded = file ? this.#expandTemplate(p, file) : p;
+      const expanded = file
+        ? this.resolveTemplate(p, { file: path.resolve(file), repoRoot: this.repoRoot })
+        : p;
       const candidate = path.isAbsolute(expanded) ? expanded : path.resolve(this.repoRoot, expanded);
       return path.resolve(candidate);
     });
-  }
-
-  #expandTemplate(template, file) {
-    const absFile = path.resolve(file);
-    const rel = path.relative(this.repoRoot, absFile);
-    const ext = path.extname(rel);
-    const basename = path.basename(rel);
-    const name = path.basename(rel, ext);
-    const dir = path.dirname(rel);
-    return template
-      .replace(/\{name\}/g, name)
-      .replace(/\{basename\}/g, basename)
-      .replace(/\{ext\}/g, ext)
-      .replace(/\{dir\}/g, dir);
   }
 
   async #readLockfile() {
