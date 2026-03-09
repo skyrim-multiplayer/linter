@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { createHash } from "crypto";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
 
@@ -17,7 +18,10 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *                    {basename} (filename with ext), {ext} (extension with dot),
  *                    {dir} (directory relative to repo root).
  *   lock           — if true, cache AI results per file in .ai-prompt-lock.json;
- *                    files whose content+prompt hash hasn't changed are skipped.
+ *                    files whose normalized-content hash hasn't changed are skipped.
+ *                    Legacy lock value 1 is treated as a universal match.
+ *   lockValue      — optional lock write mode; set to 1 to keep writing
+ *                    universal lock entries instead of file hashes.
  *
  * Lint mode:
  *   Pipes selected file contents + prompt to `claude --print` and asks for a
@@ -32,6 +36,7 @@ export class AiPromptCheck extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #lock;
+  #lockValue;
   #provider;
 
   constructor(repoRoot, options = {}) {
@@ -51,6 +56,7 @@ export class AiPromptCheck extends BaseCheck {
 
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
+    this.#lockValue = options.lockValue;
     this.#provider = new ClaudeProvider();
   }
 
@@ -85,7 +91,7 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, file)) {
       return { status: "pass" };
     }
 
@@ -113,7 +119,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (verdict.pass) {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, file);
       return { status: "pass" };
     }
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
@@ -134,7 +140,7 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
       return { status: "pass" };
     }
 
@@ -163,7 +169,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, absFile);
       return { status: "pass" };
     }
 
@@ -180,7 +186,7 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) await this.#lockWrite(relFile);
+    if (this.#lock) await this.#lockWrite(relFile, absFile);
 
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
@@ -203,7 +209,7 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
       return { status: "pass" };
     }
 
@@ -236,7 +242,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (result.pass) {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, absFile);
       return { status: "pass" };
     }
 
@@ -257,7 +263,7 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) await this.#lockWrite(relFile);
+    if (this.#lock) await this.#lockWrite(relFile, absFile);
 
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
@@ -281,17 +287,37 @@ export class AiPromptCheck extends BaseCheck {
     }
   }
 
-  async #lockMatches(relFile) {
+  async #lockMatches(relFile, absFile) {
     const lock = await this.#readLockfile();
-    return lock[this.name]?.[relFile] != null;
+    const entry = lock[this.name]?.[relFile];
+
+    if (entry == null) return false;
+    if (entry === 1) return true;
+    if (typeof entry !== "string") return false;
+
+    try {
+      const hash = await this.#getFileHash(absFile);
+      return hash === entry;
+    } catch {
+      return false;
+    }
   }
 
-  async #lockWrite(relFile) {
+  async #lockWrite(relFile, absFile) {
     const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
     const lock = await this.#readLockfile();
     if (!lock[this.name]) lock[this.name] = {};
-    lock[this.name][relFile] = 1;
+
+    const writeUniversal = this.#lockValue === 1 || this.#lockValue === "1";
+    lock[this.name][relFile] = writeUniversal ? 1 : await this.#getFileHash(absFile);
+
     await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  }
+
+  async #getFileHash(file) {
+    const raw = await fs.readFile(path.resolve(file), "utf-8");
+    const normalized = raw.replace(/\r\n?/g, "\n");
+    return createHash("sha256").update(normalized).digest("hex");
   }
 
   #dedupePaths(paths) {
@@ -326,7 +352,8 @@ export class AiPromptCheck extends BaseCheck {
         "lintPrompt — lint-specific instruction (string or array); " +
         "fixPrompt — fix-specific instruction (string or array); " +
         "filesToRead — additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); " +
-        "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false)",
+        "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false); " +
+        "lockValue — optional write mode, set to 1 to store universal lock entries instead of file hashes",
     };
   }
 }

@@ -1720,6 +1720,7 @@ var CodegenCheck = class extends BaseCheck {
 // checks/ai-prompt-check.js
 import { promises as fs10 } from "fs";
 import path7 from "path";
+import { createHash } from "crypto";
 
 // ai-providers/claude.js
 import { spawn } from "child_process";
@@ -1822,6 +1823,7 @@ var AiPromptCheck = class extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #lock;
+  #lockValue;
   #provider;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
@@ -1837,6 +1839,7 @@ var AiPromptCheck = class extends BaseCheck {
     }
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#lock = !!options.lock;
+    this.#lockValue = options.lockValue;
     this.#provider = new ClaudeProvider();
   }
   get name() {
@@ -1865,7 +1868,7 @@ var AiPromptCheck = class extends BaseCheck {
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, file)) {
       return { status: "pass" };
     }
     const prompt = `You are a code review assistant integrated into a linter.
@@ -1889,7 +1892,7 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
       return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
     if (verdict.pass) {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, file);
       return { status: "pass" };
     }
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
@@ -1906,7 +1909,7 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
       return { status: "pass" };
     }
     const prompt = `You are a code fixing assistant integrated into a linter.
@@ -1930,7 +1933,7 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
       return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, absFile);
       return { status: "pass" };
     }
     let current;
@@ -1943,7 +1946,7 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
       return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
     }
     await fs10.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await this.#lockWrite(relFile);
+    if (this.#lock) await this.#lockWrite(relFile, absFile);
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
   /**
@@ -1961,7 +1964,7 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile)) {
+    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
       return { status: "pass" };
     }
     const prompt = `You are a code review and fixing assistant integrated into a linter.
@@ -1993,7 +1996,7 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
       return { status: "error", output: `Claude returned invalid JSON: ${reply}` };
     }
     if (result.pass) {
-      if (this.#lock) await this.#lockWrite(relFile);
+      if (this.#lock) await this.#lockWrite(relFile, absFile);
       return { status: "pass" };
     }
     if (typeof result.content !== "string") {
@@ -2009,7 +2012,7 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
       return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
     }
     await fs10.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await this.#lockWrite(relFile);
+    if (this.#lock) await this.#lockWrite(relFile, absFile);
     return { status: "fixed", output: result.reason || "AI applied fixes" };
   }
   #resolvePaths(paths, file) {
@@ -2027,16 +2030,31 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
       return {};
     }
   }
-  async #lockMatches(relFile) {
+  async #lockMatches(relFile, absFile) {
     const lock = await this.#readLockfile();
-    return lock[this.name]?.[relFile] != null;
+    const entry = lock[this.name]?.[relFile];
+    if (entry == null) return false;
+    if (entry === 1) return true;
+    if (typeof entry !== "string") return false;
+    try {
+      const hash = await this.#getFileHash(absFile);
+      return hash === entry;
+    } catch {
+      return false;
+    }
   }
-  async #lockWrite(relFile) {
+  async #lockWrite(relFile, absFile) {
     const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
     const lock = await this.#readLockfile();
     if (!lock[this.name]) lock[this.name] = {};
-    lock[this.name][relFile] = 1;
+    const writeUniversal = this.#lockValue === 1 || this.#lockValue === "1";
+    lock[this.name][relFile] = writeUniversal ? 1 : await this.#getFileHash(absFile);
     await fs10.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  }
+  async #getFileHash(file) {
+    const raw = await fs10.readFile(path7.resolve(file), "utf-8");
+    const normalized = raw.replace(/\r\n?/g, "\n");
+    return createHash("sha256").update(normalized).digest("hex");
   }
   #dedupePaths(paths) {
     return Array.from(new Set(paths.map((p) => path7.resolve(p))));
@@ -2064,7 +2082,7 @@ ${content}
     return {
       name: "AiPromptCheck",
       description: "Invokes the Claude CLI with a user-defined prompt. Lint asks Claude to evaluate pass/fail. Fix asks Claude for updated file content and applies it.",
-      options: "lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false)"
+      options: "lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
     };
   }
 };
@@ -6916,7 +6934,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path11.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "45f8fc7" : "unknown";
+var LINTER_COMMIT = true ? "5d0391a" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
