@@ -21,8 +21,8 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *   lintPrompt     — lint-specific instruction
  *   fixPrompt      — fix-specific instruction
  *   filesToRead    — additional files to include as context (array of paths)
- *                    Supports templates: {name} (filename without ext),
- *                    {name_we} (filename with ext), {ext} (extension with dot),
+ *                    Supports templates: {name_without_ext} (filename without ext),
+ *                    {name_with_ext} (filename with ext), {ext} (extension with dot),
  *                    {dir} (directory relative to repo root).
  *   lock           — if true, cache AI results per file in .ai-prompt-lock.json;
  *                    files whose normalized-content hash hasn't changed are skipped.
@@ -84,8 +84,8 @@ export class AiPromptCheck extends BaseCheck {
 
   getTemplates() {
     return {
-      "{name}":     (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
-      "{name_we}": (ctx) => path.basename(ctx.file),
+      "{name_without_ext}": (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
+      "{name_with_ext}":    (ctx) => path.basename(ctx.file),
       "{ext}":      (ctx) => path.extname(ctx.file),
       "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
     };
@@ -365,7 +365,7 @@ export class AiPromptCheck extends BaseCheck {
         "aiProvider — which AI provider to use: 'claude' (default) or 'gemini'; " +
         "lintPrompt — lint-specific instruction (string or array); " +
         "fixPrompt — fix-specific instruction (string or array); " +
-        "filesToRead — additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); " +
+        "filesToRead — additional context files (array of paths, supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates); " +
         "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false); " +
         "lockValue — optional write mode, set to 1 to store universal lock entries instead of file hashes",
     };

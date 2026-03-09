@@ -1550,7 +1550,7 @@ var PairedFilesCheck = class extends BaseCheck {
   }
   getTemplates() {
     return {
-      "{{name_we}}": (ctx) => path5.basename(ctx.file, path5.extname(ctx.file))
+      "{{name_without_ext}}": (ctx) => path5.basename(ctx.file, path5.extname(ctx.file))
     };
   }
   async appliesTo(file) {
@@ -1613,7 +1613,7 @@ var PairedFilesCheck = class extends BaseCheck {
     return {
       name: "PairedFilesCheck",
       description: "Ensures matching files exist across two directories (e.g. src/*.cpp \u2194 include/*.h). Can auto-create missing files when a template is provided.",
-      options: 'dirs \u2014 array of 2 objects { "path": "...", "ext": "...", "template?": "..." } ({{name_we}} is replaced); exclude \u2014 filenames to skip'
+      options: 'dirs \u2014 array of 2 objects { "path": "...", "ext": "...", "template?": "..." } ({{name_without_ext}} is replaced); exclude \u2014 filenames to skip'
     };
   }
 };
@@ -1919,8 +1919,8 @@ var AiPromptCheck = class extends BaseCheck {
   }
   getTemplates() {
     return {
-      "{name}": (ctx) => path7.basename(ctx.file, path7.extname(ctx.file)),
-      "{name_we}": (ctx) => path7.basename(ctx.file),
+      "{name_without_ext}": (ctx) => path7.basename(ctx.file, path7.extname(ctx.file)),
+      "{name_with_ext}": (ctx) => path7.basename(ctx.file),
       "{ext}": (ctx) => path7.extname(ctx.file),
       "{dir}": (ctx) => path7.dirname(path7.relative(ctx.repoRoot, ctx.file))
     };
@@ -2150,7 +2150,7 @@ ${content}
     return {
       name: "AiPromptCheck",
       description: "Invokes an AI CLI (Claude or Gemini) with a user-defined prompt. Lint asks the AI to evaluate pass/fail. Fix asks the AI for updated file content and applies it.",
-      options: "aiProvider \u2014 which AI provider to use: 'claude' (default) or 'gemini'; lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
+      options: "aiProvider \u2014 which AI provider to use: 'claude' (default) or 'gemini'; lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
     };
   }
 };
@@ -2183,8 +2183,8 @@ var RegexCheck = class extends BaseCheck {
   }
   getTemplates() {
     return {
-      "{name}": (ctx) => path8.basename(ctx.file, path8.extname(ctx.file)),
-      "{name_we}": (ctx) => path8.basename(ctx.file),
+      "{name_without_ext}": (ctx) => path8.basename(ctx.file, path8.extname(ctx.file)),
+      "{name_with_ext}": (ctx) => path8.basename(ctx.file),
       "{ext}": (ctx) => path8.extname(ctx.file),
       "{dir}": (ctx) => path8.dirname(path8.relative(ctx.repoRoot, ctx.file))
     };
@@ -2259,7 +2259,7 @@ ${violations.join("\n")}`
     return {
       name: "RegexCheck",
       description: "Generic regex-based check. Finds lines matching a pattern and optionally auto-fixes them using a replacement string. Fully configured via options in linter-config.json.",
-      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups; supports {name}/{name_we}/{ext}/{dir} templates)\n    multiline \u2014 if true, regex operates on entire file content instead of per-line (default: false)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped (ignored when multiline is true)'
+      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups; supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates)\n    multiline \u2014 if true, regex operates on entire file content instead of per-line (default: false)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped (ignored when multiline is true)'
     };
   }
 };
@@ -7155,7 +7155,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path13.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "7f40922" : "unknown";
+var LINTER_COMMIT = true ? "a5a9814" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
