@@ -10,7 +10,7 @@ import { BaseCheck } from "./base-check.js";
  *   patternFlags   — regex flags (default: "g")
  *   replacement    — replacement string for fix mode (uses $1, $2, … groups)
  *                    Supports templates: {name} (filename without ext),
- *                    {basename} (filename with ext), {ext} (extension with dot),
+ *                    {name_we} (filename with ext), {ext} (extension with dot),
  *                    {dir} (directory relative to repo root).
  *   multiline      — if true, regex operates on entire file content instead of
  *                    per-line (default: false). Useful for multi-line patterns.
@@ -63,7 +63,7 @@ export class RegexCheck extends BaseCheck {
   getTemplates() {
     return {
       "{name}":     (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
-      "{basename}": (ctx) => path.basename(ctx.file),
+      "{name_we}": (ctx) => path.basename(ctx.file),
       "{ext}":      (ctx) => path.extname(ctx.file),
       "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
     };
@@ -154,7 +154,7 @@ export class RegexCheck extends BaseCheck {
       options:
         "pattern — regex to match violations (required)\n" +
         '    patternFlags — regex flags (default: "g")\n' +
-        "    replacement — replacement string for fix mode ($1, $2, … for groups; supports {name}/{basename}/{ext}/{dir} templates)\n" +
+        "    replacement — replacement string for fix mode ($1, $2, … for groups; supports {name}/{name_we}/{ext}/{dir} templates)\n" +
         "    multiline — if true, regex operates on entire file content instead of per-line (default: false)\n" +
         '    message — error message (default: "regex violation")\n' +
         "    skipLinePatterns — array of regex strings; matching lines are skipped (ignored when multiline is true)",

@@ -13,7 +13,7 @@ import { BaseCheck } from "./base-check.js";
  * but dir[1].ext in dir[1].path, and vice versa.
  *
  * If a dir entry includes a "template" string, fix() will create missing
- * pair files using that template. The placeholder {{basename}} is replaced
+ * pair files using that template. The placeholder {{name_we}} is replaced
  * with the file's base name (without extension).
  */
 export class PairedFilesCheck extends BaseCheck {
@@ -41,7 +41,7 @@ export class PairedFilesCheck extends BaseCheck {
 
   getTemplates() {
     return {
-      "{{basename}}": (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
+      "{{name_we}}": (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
     };
   }
 
@@ -119,7 +119,7 @@ export class PairedFilesCheck extends BaseCheck {
     return {
       name: "PairedFilesCheck",
       description: "Ensures matching files exist across two directories (e.g. src/*.cpp ↔ include/*.h). Can auto-create missing files when a template is provided.",
-      options: 'dirs — array of 2 objects { "path": "...", "ext": "...", "template?": "..." } ({{basename}} is replaced); exclude — filenames to skip',
+      options: 'dirs — array of 2 objects { "path": "...", "ext": "...", "template?": "..." } ({{name_we}} is replaced); exclude — filenames to skip',
     };
   }
 }

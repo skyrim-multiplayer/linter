@@ -15,7 +15,7 @@ const LOCKFILE_NAME = ".ai-prompt-lock.json";
  *   fixPrompt      — fix-specific instruction
  *   filesToRead    — additional files to include as context (array of paths)
  *                    Supports templates: {name} (filename without ext),
- *                    {basename} (filename with ext), {ext} (extension with dot),
+ *                    {name_we} (filename with ext), {ext} (extension with dot),
  *                    {dir} (directory relative to repo root).
  *   lock           — if true, cache AI results per file in .ai-prompt-lock.json;
  *                    files whose normalized-content hash hasn't changed are skipped.
@@ -72,7 +72,7 @@ export class AiPromptCheck extends BaseCheck {
   getTemplates() {
     return {
       "{name}":     (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
-      "{basename}": (ctx) => path.basename(ctx.file),
+      "{name_we}": (ctx) => path.basename(ctx.file),
       "{ext}":      (ctx) => path.extname(ctx.file),
       "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
     };
@@ -351,7 +351,7 @@ export class AiPromptCheck extends BaseCheck {
       options:
         "lintPrompt — lint-specific instruction (string or array); " +
         "fixPrompt — fix-specific instruction (string or array); " +
-        "filesToRead — additional context files (array of paths, supports {name}/{basename}/{ext}/{dir} templates); " +
+        "filesToRead — additional context files (array of paths, supports {name}/{name_we}/{ext}/{dir} templates); " +
         "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false); " +
         "lockValue — optional write mode, set to 1 to store universal lock entries instead of file hashes",
     };
