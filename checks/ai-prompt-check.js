@@ -181,9 +181,11 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
+    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
+
     if (!result.changed || typeof result.content !== "string") {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
-      return { status: "pass" };
+      return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
     let current;
@@ -201,7 +203,7 @@ export class AiPromptCheck extends BaseCheck {
 
     if (this.#lock) await this.#lockWrite(relFile, absFile);
 
-    return { status: "fixed", output: result.reason || "AI applied fixes" };
+    return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
   }
 
   /**
@@ -254,9 +256,11 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
+    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
+
     if (result.pass) {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
-      return { status: "pass" };
+      return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
     if (typeof result.content !== "string") {
@@ -278,7 +282,7 @@ export class AiPromptCheck extends BaseCheck {
 
     if (this.#lock) await this.#lockWrite(relFile, absFile);
 
-    return { status: "fixed", output: result.reason || "AI applied fixes" };
+    return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
   }
 
   #resolvePaths(paths, file) {

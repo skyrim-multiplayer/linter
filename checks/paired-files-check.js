@@ -112,7 +112,7 @@ export class PairedFilesCheck extends BaseCheck {
     } catch (err) {
       return { status: "error", output: `failed to create ${pairPath}: ${err.message}` };
     }
-    return { status: "fixed", output: `created ${pairPath}` };
+    return { status: "fixed", output: `created ${pairPath}`, extraFiles: [pairPath] };
   }
 
   static getHelp() {

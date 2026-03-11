@@ -1607,7 +1607,7 @@ var PairedFilesCheck = class extends BaseCheck {
     } catch (err) {
       return { status: "error", output: `failed to create ${pairPath}: ${err.message}` };
     }
-    return { status: "fixed", output: `created ${pairPath}` };
+    return { status: "fixed", output: `created ${pairPath}`, extraFiles: [pairPath] };
   }
   static getHelp() {
     return {
@@ -2000,9 +2000,10 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     } catch {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
+    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
     if (!result.changed || typeof result.content !== "string") {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
-      return { status: "pass" };
+      return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
     let current;
     try {
@@ -2015,7 +2016,7 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     }
     await fs10.writeFile(absFile, result.content, "utf-8");
     if (this.#lock) await this.#lockWrite(relFile, absFile);
-    return { status: "fixed", output: result.reason || "AI applied fixes" };
+    return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
   }
   /**
    * Combined lint + fix in a single AI call.
@@ -2063,9 +2064,10 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     } catch {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
+    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
     if (result.pass) {
       if (this.#lock) await this.#lockWrite(relFile, absFile);
-      return { status: "pass" };
+      return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
     if (typeof result.content !== "string") {
       return { status: "fail", output: result.reason || "AI check failed and could not produce a fix" };
@@ -2081,7 +2083,7 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     }
     await fs10.writeFile(absFile, result.content, "utf-8");
     if (this.#lock) await this.#lockWrite(relFile, absFile);
-    return { status: "fixed", output: result.reason || "AI applied fixes" };
+    return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
   }
   #resolvePaths(paths, file) {
     return paths.map((p) => {
@@ -7155,7 +7157,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path13.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "a5a9814" : "unknown";
+var LINTER_COMMIT = true ? "7fcd161" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
