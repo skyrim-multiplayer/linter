@@ -1,16 +1,17 @@
 import { promises as fs } from "fs";
 import path from "path";
-import { createHash } from "crypto";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
 import { GeminiProvider } from "../ai-providers/gemini.js";
+import {
+  coerce, coerceArray, standardTemplates, resolvePaths, dedupePaths,
+  buildFileContext, lockfilePath, lockMatches, lockWrite,
+} from "./check-utils.js";
 
 const AI_PROVIDERS = {
   claude: ClaudeProvider,
   gemini: GeminiProvider,
 };
-
-const LOCKFILE_NAME = ".ai-prompt-lock.json";
 
 /**
  * AI Prompt check — invokes an AI CLI (Claude or Gemini) in a
@@ -48,11 +49,6 @@ export class AiPromptCheck extends BaseCheck {
 
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
-    const coerce = (v) => (v == null ? undefined : Array.isArray(v) ? v.join("\n") : v);
-    const coerceArray = (v) => {
-      if (v == null) return [];
-      return Array.isArray(v) ? v : [v];
-    };
 
     this.#lintPrompt = coerce(options.lintPrompt);
     this.#fixPrompt = coerce(options.fixPrompt);
@@ -83,12 +79,7 @@ export class AiPromptCheck extends BaseCheck {
   }
 
   getTemplates() {
-    return {
-      "{name_without_ext}": (ctx) => path.basename(ctx.file, path.extname(ctx.file)),
-      "{name_with_ext}":    (ctx) => path.basename(ctx.file),
-      "{ext}":      (ctx) => path.extname(ctx.file),
-      "{dir}":      (ctx) => path.dirname(path.relative(ctx.repoRoot, ctx.file)),
-    };
+    return standardTemplates();
   }
 
   async lint(file, _deps) {
@@ -98,13 +89,13 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
 
-    const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
-    const context = await this.#buildFileContext(promptFiles);
+    const promptFiles = dedupePaths([file, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
+    const context = await buildFileContext(promptFiles, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile, file)) {
+    if (this.#lock && await lockMatches(this.name, relFile, file, this.repoRoot)) {
       return { status: "pass" };
     }
 
@@ -132,7 +123,7 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     if (verdict.pass) {
-      if (this.#lock) await this.#lockWrite(relFile, file);
+      if (this.#lock) await lockWrite(this.name, relFile, file, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass" };
     }
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
@@ -146,14 +137,14 @@ export class AiPromptCheck extends BaseCheck {
     }
 
     const absFile = path.resolve(file);
-    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
 
-    const context = await this.#buildFileContext(filesToRead);
+    const context = await buildFileContext(filesToRead, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
     }
 
@@ -181,10 +172,10 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
-    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
+    const lockPath = lockfilePath(this.repoRoot);
 
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await this.#lockWrite(relFile, absFile);
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
@@ -201,7 +192,7 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) await this.#lockWrite(relFile, absFile);
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
 
     return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
   }
@@ -217,14 +208,14 @@ export class AiPromptCheck extends BaseCheck {
 
     const relFile = path.relative(this.repoRoot, file);
     const absFile = path.resolve(file);
-    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
+    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
 
-    const context = await this.#buildFileContext(filesToRead);
+    const context = await buildFileContext(filesToRead, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
 
-    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
     }
 
@@ -256,10 +247,10 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
 
-    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
+    const lockPath = lockfilePath(this.repoRoot);
 
     if (result.pass) {
-      if (this.#lock) await this.#lockWrite(relFile, absFile);
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
@@ -280,83 +271,9 @@ export class AiPromptCheck extends BaseCheck {
 
     await fs.writeFile(absFile, result.content, "utf-8");
 
-    if (this.#lock) await this.#lockWrite(relFile, absFile);
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
 
     return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
-  }
-
-  #resolvePaths(paths, file) {
-    return paths.map((p) => {
-      const expanded = file
-        ? this.resolveTemplate(p, { file: path.resolve(file), repoRoot: this.repoRoot })
-        : p;
-      const candidate = path.isAbsolute(expanded) ? expanded : path.resolve(this.repoRoot, expanded);
-      return path.resolve(candidate);
-    });
-  }
-
-  async #readLockfile() {
-    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
-    try {
-      return JSON.parse(await fs.readFile(lockPath, "utf-8"));
-    } catch { 
-      return {};
-    }
-  }
-
-  async #lockMatches(relFile, absFile) {
-    const lock = await this.#readLockfile();
-    const entry = lock[this.name]?.[relFile];
-
-    if (entry == null) return false;
-    if (entry === 1) return true;
-    if (typeof entry !== "string") return false;
-
-    try {
-      const hash = await this.#getFileHash(absFile);
-      return hash === entry;
-    } catch {
-      return false;
-    }
-  }
-
-  async #lockWrite(relFile, absFile) {
-    const lockPath = path.join(this.repoRoot, LOCKFILE_NAME);
-    const lock = await this.#readLockfile();
-    if (!lock[this.name]) lock[this.name] = {};
-
-    const writeUniversal = this.#lockValue === 1 || this.#lockValue === "1";
-    lock[this.name][relFile] = writeUniversal ? 1 : await this.#getFileHash(absFile);
-
-    await fs.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
-  }
-
-  async #getFileHash(file) {
-    const raw = await fs.readFile(path.resolve(file), "utf-8");
-    const normalized = raw.replace(/\r\n?/g, "\n");
-    return createHash("sha256").update(normalized).digest("hex");
-  }
-
-  #dedupePaths(paths) {
-    return Array.from(new Set(paths.map((p) => path.resolve(p))));
-  }
-
-  async #buildFileContext(absPaths) {
-    const chunks = [];
-    for (const absPath of absPaths) {
-      const rel = path.relative(this.repoRoot, absPath);
-      if (rel.startsWith("..") || path.isAbsolute(rel)) {
-        return { error: `path outside repo root is not allowed: ${absPath}` };
-      }
-      let content;
-      try {
-        content = await fs.readFile(absPath, "utf-8");
-      } catch (err) {
-        return { error: `cannot read context file ${rel}: ${err.message}` };
-      }
-      chunks.push(`--- file: ${rel} ---\n${content}\n--- end file: ${rel} ---`);
-    }
-    return { value: chunks.join("\n\n") };
   }
 
   static getHelp() {

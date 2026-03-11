@@ -157,7 +157,7 @@ var require_common = __commonJS({
     function setup(env) {
       createDebug.debug = createDebug;
       createDebug.default = createDebug;
-      createDebug.coerce = coerce;
+      createDebug.coerce = coerce2;
       createDebug.disable = disable;
       createDebug.enable = enable;
       createDebug.enabled = enabled;
@@ -312,7 +312,7 @@ var require_common = __commonJS({
         }
         return false;
       }
-      function coerce(val) {
+      function coerce2(val) {
         if (val instanceof Error) {
           return val.stack || val.message;
         }
@@ -694,10 +694,10 @@ var require_src2 = __commonJS({
     var fs_1 = __require("fs");
     var debug_1 = __importDefault(require_src());
     var log = debug_1.default("@kwsites/file-exists");
-    function check(path14, isFile, isDirectory) {
-      log(`checking %s`, path14);
+    function check(path16, isFile, isDirectory) {
+      log(`checking %s`, path16);
       try {
-        const stat = fs_1.statSync(path14);
+        const stat = fs_1.statSync(path16);
         if (stat.isFile() && isFile) {
           log(`[OK] path represents a file`);
           return true;
@@ -717,8 +717,8 @@ var require_src2 = __commonJS({
         throw e;
       }
     }
-    function exists2(path14, type = exports.READABLE) {
-      return check(path14, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
+    function exists2(path16, type = exports.READABLE) {
+      return check(path16, (type & exports.FILE) > 0, (type & exports.FOLDER) > 0);
     }
     exports.exists = exists2;
     exports.FILE = 1;
@@ -782,8 +782,8 @@ var require_dist2 = __commonJS({
 });
 
 // linter.js
-import fs16 from "fs";
-import path13 from "path";
+import fs18 from "fs";
+import path15 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
 
@@ -1718,9 +1718,8 @@ var CodegenCheck = class extends BaseCheck {
 };
 
 // checks/ai-prompt-check.js
-import { promises as fs10 } from "fs";
-import path7 from "path";
-import { createHash } from "crypto";
+import { promises as fs11 } from "fs";
+import path8 from "path";
 
 // ai-providers/claude.js
 import { spawn } from "child_process";
@@ -1875,12 +1874,104 @@ var GeminiProvider = class extends BaseAiProvider {
   }
 };
 
+// checks/check-utils.js
+import { promises as fs10 } from "fs";
+import path7 from "path";
+import { createHash } from "crypto";
+var LOCKFILE_NAME = ".ai-prompt-lock.json";
+var coerce = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
+var coerceArray = (v) => {
+  if (v == null) return [];
+  return Array.isArray(v) ? v : [v];
+};
+var standardTemplates = () => ({
+  "{name_without_ext}": (ctx) => path7.basename(ctx.file, path7.extname(ctx.file)),
+  "{name_with_ext}": (ctx) => path7.basename(ctx.file),
+  "{ext}": (ctx) => path7.extname(ctx.file),
+  "{dir}": (ctx) => path7.dirname(path7.relative(ctx.repoRoot, ctx.file))
+});
+var resolvePaths = (paths, file, resolveTemplate, repoRoot) => paths.map((p) => {
+  const expanded = file ? resolveTemplate(p, { file: path7.resolve(file), repoRoot }) : p;
+  const candidate = path7.isAbsolute(expanded) ? expanded : path7.resolve(repoRoot, expanded);
+  return path7.resolve(candidate);
+});
+var dedupePaths = (paths) => Array.from(new Set(paths.map((p) => path7.resolve(p))));
+var buildFileContext = async (absPaths, repoRoot) => {
+  const chunks = [];
+  for (const absPath of absPaths) {
+    const rel = path7.relative(repoRoot, absPath);
+    if (rel.startsWith("..") || path7.isAbsolute(rel)) {
+      return { error: `path outside repo root is not allowed: ${absPath}` };
+    }
+    let content;
+    try {
+      content = await fs10.readFile(absPath, "utf-8");
+    } catch (err) {
+      return { error: `cannot read context file ${rel}: ${err.message}` };
+    }
+    chunks.push(`--- file: ${rel} ---
+${content}
+--- end file: ${rel} ---`);
+  }
+  return { value: chunks.join("\n\n") };
+};
+var buildFilesMap = async (absPaths, repoRoot) => {
+  const filesMap = {};
+  for (const absPath of absPaths) {
+    const rel = path7.relative(repoRoot, absPath);
+    if (rel.startsWith("..") || path7.isAbsolute(rel)) {
+      return { error: `path outside repo root is not allowed: ${absPath}` };
+    }
+    let content;
+    try {
+      content = await fs10.readFile(absPath, "utf-8");
+    } catch (err) {
+      return { error: `cannot read file ${rel}: ${err.message}` };
+    }
+    filesMap[rel] = content;
+  }
+  return { value: filesMap };
+};
+var lockfilePath = (repoRoot) => path7.join(repoRoot, LOCKFILE_NAME);
+var readLockfile = async (repoRoot) => {
+  try {
+    return JSON.parse(await fs10.readFile(lockfilePath(repoRoot), "utf-8"));
+  } catch {
+    return {};
+  }
+};
+var getFileHash = async (file) => {
+  const raw = await fs10.readFile(path7.resolve(file), "utf-8");
+  const normalized = raw.replace(/\r\n?/g, "\n");
+  return createHash("sha256").update(normalized).digest("hex");
+};
+var lockMatches = async (checkName, relFile, absFile, repoRoot) => {
+  const lock = await readLockfile(repoRoot);
+  const entry = lock[checkName]?.[relFile];
+  if (entry == null) return false;
+  if (entry === 1) return true;
+  if (typeof entry !== "string") return false;
+  try {
+    const hash = await getFileHash(absFile);
+    return hash === entry;
+  } catch {
+    return false;
+  }
+};
+var lockWrite = async (checkName, relFile, absFile, repoRoot, opts = {}) => {
+  const lp = lockfilePath(repoRoot);
+  const lock = await readLockfile(repoRoot);
+  if (!lock[checkName]) lock[checkName] = {};
+  const writeUniversal = opts.lockValue === 1 || opts.lockValue === "1";
+  lock[checkName][relFile] = writeUniversal ? 1 : await getFileHash(absFile);
+  await fs10.writeFile(lp, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+};
+
 // checks/ai-prompt-check.js
 var AI_PROVIDERS = {
   claude: ClaudeProvider,
   gemini: GeminiProvider
 };
-var LOCKFILE_NAME = ".ai-prompt-lock.json";
 var AiPromptCheck = class extends BaseCheck {
   #lintPrompt;
   #fixPrompt;
@@ -1890,11 +1981,6 @@ var AiPromptCheck = class extends BaseCheck {
   #provider;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
-    const coerce = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
-    const coerceArray = (v) => {
-      if (v == null) return [];
-      return Array.isArray(v) ? v : [v];
-    };
     this.#lintPrompt = coerce(options.lintPrompt);
     this.#fixPrompt = coerce(options.fixPrompt);
     if (!this.#lintPrompt && !this.#fixPrompt) {
@@ -1918,25 +2004,20 @@ var AiPromptCheck = class extends BaseCheck {
     return true;
   }
   getTemplates() {
-    return {
-      "{name_without_ext}": (ctx) => path7.basename(ctx.file, path7.extname(ctx.file)),
-      "{name_with_ext}": (ctx) => path7.basename(ctx.file),
-      "{ext}": (ctx) => path7.extname(ctx.file),
-      "{dir}": (ctx) => path7.dirname(path7.relative(ctx.repoRoot, ctx.file))
-    };
+    return standardTemplates();
   }
   async lint(file, _deps) {
-    const relFile = path7.relative(this.repoRoot, file);
+    const relFile = path8.relative(this.repoRoot, file);
     const instruction = this.#lintPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
-    const promptFiles = this.#dedupePaths([file, ...this.#resolvePaths(this.#filesToRead, file)]);
-    const context = await this.#buildFileContext(promptFiles);
+    const promptFiles = dedupePaths([file, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
+    const context = await buildFileContext(promptFiles, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile, file)) {
+    if (this.#lock && await lockMatches(this.name, relFile, file, this.repoRoot)) {
       return { status: "pass" };
     }
     const prompt = `You are a code review assistant integrated into a linter.
@@ -1960,24 +2041,24 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
     if (verdict.pass) {
-      if (this.#lock) await this.#lockWrite(relFile, file);
+      if (this.#lock) await lockWrite(this.name, relFile, file, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass" };
     }
     return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
   }
   async fix(file, _deps) {
-    const relFile = path7.relative(this.repoRoot, file);
+    const relFile = path8.relative(this.repoRoot, file);
     const instruction = this.#fixPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
     }
-    const absFile = path7.resolve(file);
-    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
-    const context = await this.#buildFileContext(filesToRead);
+    const absFile = path8.resolve(file);
+    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
+    const context = await buildFileContext(filesToRead, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
     }
     const prompt = `You are a code fixing assistant integrated into a linter.
@@ -2000,22 +2081,22 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
     } catch {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
-    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
+    const lockPath = lockfilePath(this.repoRoot);
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await this.#lockWrite(relFile, absFile);
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
     let current;
     try {
-      current = await fs10.readFile(absFile, "utf-8");
+      current = await fs11.readFile(absFile, "utf-8");
     } catch (err) {
       return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
     }
     if (current === result.content) {
       return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
     }
-    await fs10.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await this.#lockWrite(relFile, absFile);
+    await fs11.writeFile(absFile, result.content, "utf-8");
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
     return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
   }
   /**
@@ -2026,14 +2107,14 @@ Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "
    */
   async lintAndFix(file, _deps) {
     if (!this.#lintPrompt || !this.#fixPrompt) return null;
-    const relFile = path7.relative(this.repoRoot, file);
-    const absFile = path7.resolve(file);
-    const filesToRead = this.#dedupePaths([absFile, ...this.#resolvePaths(this.#filesToRead, file)]);
-    const context = await this.#buildFileContext(filesToRead);
+    const relFile = path8.relative(this.repoRoot, file);
+    const absFile = path8.resolve(file);
+    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
+    const context = await buildFileContext(filesToRead, this.repoRoot);
     if (context.error) {
       return { status: "error", output: context.error };
     }
-    if (this.#lock && await this.#lockMatches(relFile, absFile)) {
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
     }
     const prompt = `You are a code review and fixing assistant integrated into a linter.
@@ -2064,9 +2145,9 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     } catch {
       return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
-    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
+    const lockPath = lockfilePath(this.repoRoot);
     if (result.pass) {
-      if (this.#lock) await this.#lockWrite(relFile, absFile);
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
     if (typeof result.content !== "string") {
@@ -2074,79 +2155,16 @@ If the file fails but cannot be fixed, set pass to false and omit content.`;
     }
     let current;
     try {
-      current = await fs10.readFile(absFile, "utf-8");
+      current = await fs11.readFile(absFile, "utf-8");
     } catch (err) {
       return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
     }
     if (current === result.content) {
       return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
     }
-    await fs10.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await this.#lockWrite(relFile, absFile);
+    await fs11.writeFile(absFile, result.content, "utf-8");
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
     return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
-  }
-  #resolvePaths(paths, file) {
-    return paths.map((p) => {
-      const expanded = file ? this.resolveTemplate(p, { file: path7.resolve(file), repoRoot: this.repoRoot }) : p;
-      const candidate = path7.isAbsolute(expanded) ? expanded : path7.resolve(this.repoRoot, expanded);
-      return path7.resolve(candidate);
-    });
-  }
-  async #readLockfile() {
-    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
-    try {
-      return JSON.parse(await fs10.readFile(lockPath, "utf-8"));
-    } catch {
-      return {};
-    }
-  }
-  async #lockMatches(relFile, absFile) {
-    const lock = await this.#readLockfile();
-    const entry = lock[this.name]?.[relFile];
-    if (entry == null) return false;
-    if (entry === 1) return true;
-    if (typeof entry !== "string") return false;
-    try {
-      const hash = await this.#getFileHash(absFile);
-      return hash === entry;
-    } catch {
-      return false;
-    }
-  }
-  async #lockWrite(relFile, absFile) {
-    const lockPath = path7.join(this.repoRoot, LOCKFILE_NAME);
-    const lock = await this.#readLockfile();
-    if (!lock[this.name]) lock[this.name] = {};
-    const writeUniversal = this.#lockValue === 1 || this.#lockValue === "1";
-    lock[this.name][relFile] = writeUniversal ? 1 : await this.#getFileHash(absFile);
-    await fs10.writeFile(lockPath, JSON.stringify(lock, null, 2) + "\n", "utf-8");
-  }
-  async #getFileHash(file) {
-    const raw = await fs10.readFile(path7.resolve(file), "utf-8");
-    const normalized = raw.replace(/\r\n?/g, "\n");
-    return createHash("sha256").update(normalized).digest("hex");
-  }
-  #dedupePaths(paths) {
-    return Array.from(new Set(paths.map((p) => path7.resolve(p))));
-  }
-  async #buildFileContext(absPaths) {
-    const chunks = [];
-    for (const absPath of absPaths) {
-      const rel = path7.relative(this.repoRoot, absPath);
-      if (rel.startsWith("..") || path7.isAbsolute(rel)) {
-        return { error: `path outside repo root is not allowed: ${absPath}` };
-      }
-      let content;
-      try {
-        content = await fs10.readFile(absPath, "utf-8");
-      } catch (err) {
-        return { error: `cannot read context file ${rel}: ${err.message}` };
-      }
-      chunks.push(`--- file: ${rel} ---
-${content}
---- end file: ${rel} ---`);
-    }
-    return { value: chunks.join("\n\n") };
   }
   static getHelp() {
     return {
@@ -2158,8 +2176,8 @@ ${content}
 };
 
 // checks/regex-check.js
-import fs11 from "fs/promises";
-import path8 from "path";
+import fs12 from "fs/promises";
+import path9 from "path";
 var RegexCheck = class extends BaseCheck {
   #pattern;
   #replacement;
@@ -2185,15 +2203,15 @@ var RegexCheck = class extends BaseCheck {
   }
   getTemplates() {
     return {
-      "{name_without_ext}": (ctx) => path8.basename(ctx.file, path8.extname(ctx.file)),
-      "{name_with_ext}": (ctx) => path8.basename(ctx.file),
-      "{ext}": (ctx) => path8.extname(ctx.file),
-      "{dir}": (ctx) => path8.dirname(path8.relative(ctx.repoRoot, ctx.file))
+      "{name_without_ext}": (ctx) => path9.basename(ctx.file, path9.extname(ctx.file)),
+      "{name_with_ext}": (ctx) => path9.basename(ctx.file),
+      "{ext}": (ctx) => path9.extname(ctx.file),
+      "{dir}": (ctx) => path9.dirname(path9.relative(ctx.repoRoot, ctx.file))
     };
   }
   async lint(file) {
     try {
-      const content = await fs11.readFile(file, "utf-8");
+      const content = await fs12.readFile(file, "utf-8");
       const violations = [];
       if (this.#multiline) {
         const re = new RegExp(this.#pattern.source, this.#pattern.flags);
@@ -2231,9 +2249,9 @@ ${violations.join("\n")}`
       return this.lint(file);
     }
     try {
-      const original = await fs11.readFile(file, "utf-8");
+      const original = await fs12.readFile(file, "utf-8");
       const replacement = this.resolveTemplate(this.#replacement, {
-        file: path8.resolve(file),
+        file: path9.resolve(file),
         repoRoot: this.repoRoot
       });
       let fixed;
@@ -2249,7 +2267,7 @@ ${violations.join("\n")}`
         }).join("\n");
       }
       if (fixed !== original) {
-        await fs11.writeFile(file, fixed, "utf-8");
+        await fs12.writeFile(file, fixed, "utf-8");
         return { status: "fixed" };
       }
       return { status: "pass" };
@@ -2267,8 +2285,8 @@ ${violations.join("\n")}`
 };
 
 // checks/firecrawl-check.js
-import { promises as fs12 } from "fs";
-import path9 from "path";
+import { promises as fs13 } from "fs";
+import path10 from "path";
 var FirecrawlCheck = class extends BaseCheck {
   #outputFormat;
   #apiKey;
@@ -2321,13 +2339,13 @@ var FirecrawlCheck = class extends BaseCheck {
     if (!scraped) {
       return { status: "error", output: "Firecrawl returned empty content" };
     }
-    await fs12.writeFile(path9.resolve(file), scraped, "utf-8");
+    await fs13.writeFile(path10.resolve(file), scraped, "utf-8");
     return { status: "fixed", output: `scraped ${url.value}` };
   }
   async #extractUrl(file) {
     let content;
     try {
-      content = await fs12.readFile(path9.resolve(file), "utf-8");
+      content = await fs13.readFile(path10.resolve(file), "utf-8");
     } catch (err) {
       return { error: `cannot read file: ${err.message}` };
     }
@@ -2387,6 +2405,281 @@ var FirecrawlCheck = class extends BaseCheck {
   }
 };
 
+// checks/agent-check.js
+import { promises as fs14 } from "fs";
+import path11 from "path";
+var DEFAULT_POLL_INTERVAL = 3e3;
+var DEFAULT_TIMEOUT = 3e5;
+var AgentCheck = class extends BaseCheck {
+  #agentUrl;
+  #agentApiKey;
+  #lintPrompt;
+  #fixPrompt;
+  #filesToRead;
+  #allowedWritePatterns;
+  #timeout;
+  #pollInterval;
+  #lock;
+  constructor(repoRoot, options = {}) {
+    super(repoRoot, options);
+    if (!options.agentUrl) {
+      throw new Error("AgentCheck requires options.agentUrl");
+    }
+    if (!options.agentApiKey) {
+      throw new Error("AgentCheck requires options.agentApiKey");
+    }
+    const coerceStr = (v) => v == null ? void 0 : Array.isArray(v) ? v.join("\n") : v;
+    this.#agentUrl = options.agentUrl.replace(/\/+$/, "");
+    this.#agentApiKey = options.agentApiKey;
+    this.#lintPrompt = coerceStr(options.lintPrompt);
+    this.#fixPrompt = coerceStr(options.fixPrompt);
+    if (!this.#lintPrompt && !this.#fixPrompt) {
+      throw new Error("AgentCheck requires at least one of: lintPrompt, fixPrompt");
+    }
+    this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
+    this.#allowedWritePatterns = coerceArray(options.allowedWritePaths);
+    this.#timeout = options.timeout ?? DEFAULT_TIMEOUT;
+    this.#pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
+    this.#lock = !!options.lock;
+  }
+  get name() {
+    const label = this.#lintPrompt || this.#fixPrompt;
+    return `Agent (${label.slice(0, 50)}${label.length > 50 ? "\u2026" : ""})`;
+  }
+  checkDeps() {
+    return true;
+  }
+  getTemplates() {
+    return standardTemplates();
+  }
+  // ── lint ────────────────────────────────────────────────────────────
+  async lint(file, _deps) {
+    const instruction = this.#lintPrompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
+    }
+    const relFile = path11.relative(this.repoRoot, file);
+    if (this.#lock && await lockMatches(this.name, relFile, file, this.repoRoot)) {
+      return { status: "pass" };
+    }
+    const filesMap = await this.#buildFilesMap(file);
+    if (filesMap.error) {
+      return { status: "error", output: filesMap.error };
+    }
+    let result;
+    try {
+      result = await this.#runAgent({
+        prompt: instruction,
+        mode: "lint",
+        primaryFile: relFile,
+        files: filesMap.value
+      });
+    } catch (err) {
+      return { status: "error", output: `Agent error: ${err.message}` };
+    }
+    if (result.pass) {
+      if (this.#lock) await lockWrite(this.name, relFile, file, this.repoRoot);
+      return { status: "pass" };
+    }
+    return { status: "fail", output: result.reason || "Agent check failed (no reason provided)" };
+  }
+  // ── fix ─────────────────────────────────────────────────────────────
+  async fix(file, _deps) {
+    const instruction = this.#fixPrompt;
+    if (!instruction) {
+      return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
+    }
+    const absFile = path11.resolve(file);
+    const relFile = path11.relative(this.repoRoot, absFile);
+    const lockPath = lockfilePath(this.repoRoot);
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+      return { status: "pass" };
+    }
+    const filesMap = await this.#buildFilesMap(file);
+    if (filesMap.error) {
+      return { status: "error", output: filesMap.error };
+    }
+    let result;
+    try {
+      result = await this.#runAgent({
+        prompt: instruction,
+        mode: "fix",
+        primaryFile: relFile,
+        files: filesMap.value
+      });
+    } catch (err) {
+      return { status: "error", output: `Agent error: ${err.message}` };
+    }
+    if (result.pass || !result.files || Object.keys(result.files).length === 0) {
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+      return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
+    }
+    const written = await this.#applyFiles(result.files);
+    if (written.error) {
+      return { status: "error", output: written.error };
+    }
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+    const extras = written.paths.filter((p) => p !== absFile);
+    if (this.#lock) extras.push(lockPath);
+    return {
+      status: "fixed",
+      output: result.reason || "Agent applied fixes",
+      ...extras.length > 0 && { extraFiles: extras }
+    };
+  }
+  // ── lintAndFix ──────────────────────────────────────────────────────
+  async lintAndFix(file, _deps) {
+    if (!this.#lintPrompt || !this.#fixPrompt) return null;
+    const absFile = path11.resolve(file);
+    const relFile = path11.relative(this.repoRoot, absFile);
+    const lockPath = lockfilePath(this.repoRoot);
+    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+      return { status: "pass" };
+    }
+    const filesMap = await this.#buildFilesMap(file);
+    if (filesMap.error) {
+      return { status: "error", output: filesMap.error };
+    }
+    let result;
+    try {
+      result = await this.#runAgent({
+        prompt: `Lint criteria: ${this.#lintPrompt}
+Fix instruction: ${this.#fixPrompt}`,
+        mode: "fix",
+        primaryFile: relFile,
+        files: filesMap.value
+      });
+    } catch (err) {
+      return { status: "error", output: `Agent error: ${err.message}` };
+    }
+    if (result.pass) {
+      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+      return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
+    }
+    if (!result.files || Object.keys(result.files).length === 0) {
+      return { status: "fail", output: result.reason || "Agent check failed and could not produce a fix" };
+    }
+    const written = await this.#applyFiles(result.files);
+    if (written.error) {
+      return { status: "error", output: written.error };
+    }
+    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+    const extras = written.paths.filter((p) => p !== absFile);
+    if (this.#lock) extras.push(lockPath);
+    return {
+      status: "fixed",
+      output: result.reason || "Agent applied fixes",
+      ...extras.length > 0 && { extraFiles: extras }
+    };
+  }
+  // ── HTTP transport ──────────────────────────────────────────────────
+  async #runAgent(payload) {
+    const apiKey = this.#resolveApiKey();
+    if (!apiKey) {
+      throw new Error("Agent API key not configured. Set agentApiKey in options or the referenced env var.");
+    }
+    const createRes = await fetch(`${this.#agentUrl}/tasks`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!createRes.ok) {
+      const body = await createRes.text().catch(() => "");
+      throw new Error(`POST /tasks failed (${createRes.status}): ${body}`);
+    }
+    const { taskId } = await createRes.json();
+    if (!taskId) {
+      throw new Error("POST /tasks response missing taskId");
+    }
+    const deadline = Date.now() + this.#timeout;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, this.#pollInterval));
+      const pollRes = await fetch(`${this.#agentUrl}/tasks/${encodeURIComponent(taskId)}`, {
+        headers: { "Authorization": `Bearer ${apiKey}` }
+      });
+      if (!pollRes.ok) {
+        const body = await pollRes.text().catch(() => "");
+        throw new Error(`GET /tasks/${taskId} failed (${pollRes.status}): ${body}`);
+      }
+      const task = await pollRes.json();
+      if (task.status === "completed") {
+        return task.result || { pass: true };
+      }
+      if (task.status === "failed") {
+        throw new Error(task.error || "Agent task failed (no details)");
+      }
+    }
+    throw new Error(`Agent task ${taskId} timed out after ${this.#timeout}ms`);
+  }
+  #resolveApiKey() {
+    let key = this.#agentApiKey;
+    if (key && key.startsWith("$")) {
+      key = process.env[key.slice(1)] || null;
+    }
+    return key || null;
+  }
+  // ── File I/O helpers ────────────────────────────────────────────────
+  async #buildFilesMap(file) {
+    const absFile = path11.resolve(file);
+    const contextPaths = resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot);
+    const allPaths = dedupePaths([absFile, ...contextPaths]);
+    return buildFilesMap(allPaths, this.repoRoot);
+  }
+  /**
+   * Apply file changes from agent response, filtered by allowedWritePaths.
+   * @returns {{ paths: string[], error?: string }}
+   */
+  async #applyFiles(files) {
+    const written = [];
+    for (const [relPath2, content] of Object.entries(files)) {
+      const normalized = path11.normalize(relPath2);
+      if (normalized.startsWith("..") || path11.isAbsolute(normalized)) {
+        continue;
+      }
+      if (!this.#isAllowedPath(normalized)) {
+        continue;
+      }
+      const absPath = path11.resolve(this.repoRoot, normalized);
+      await fs14.mkdir(path11.dirname(absPath), { recursive: true });
+      await fs14.writeFile(absPath, content, "utf-8");
+      written.push(absPath);
+    }
+    return { paths: written };
+  }
+  /**
+   * Check if a relative path matches any of the allowedWritePaths globs.
+   * Supports simple glob patterns: * (any within segment), ** (any segments).
+   */
+  #isAllowedPath(relPath2) {
+    if (this.#allowedWritePatterns.length === 0) return true;
+    for (const pattern of this.#allowedWritePatterns) {
+      if (this.#matchGlob(pattern, relPath2)) return true;
+    }
+    return false;
+  }
+  /**
+   * Minimal glob matcher for path filtering.
+   * Supports: ** (any path segments), * (any chars within one segment).
+   */
+  #matchGlob(pattern, filePath) {
+    const regexStr = pattern.split("**").map(
+      (segment) => segment.split("*").map((s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&")).join("[^/]*")
+    ).join(".*");
+    return new RegExp(`^${regexStr}$`).test(filePath);
+  }
+  // ── Help ────────────────────────────────────────────────────────────
+  static getHelp() {
+    return {
+      name: "AgentCheck",
+      description: "Sends files to a remote agent server for analysis/fixing in a sandboxed environment. Uses async HTTP task API (POST /tasks, GET /tasks/{id}) with polling.",
+      options: "agentUrl \u2014 base URL of agent server (required); agentApiKey \u2014 API key, prefix with $ to read from env var (required); lintPrompt \u2014 instruction for lint mode; fixPrompt \u2014 instruction for fix mode; filesToRead \u2014 additional context files (supports templates); allowedWritePaths \u2014 glob patterns for paths agent may write to; timeout \u2014 overall timeout in ms (default: 300000); pollInterval \u2014 polling interval in ms (default: 3000); lock \u2014 cache results in .ai-prompt-lock.json (boolean)"
+    };
+  }
+};
+
 // checks/composite-check.js
 var CompositeCheck = class extends BaseCheck {
   #linter;
@@ -2432,8 +2725,8 @@ var CompositeCheck = class extends BaseCheck {
 };
 
 // file-sources/all-files-source.js
-import fs13 from "fs";
-import path10 from "path";
+import fs15 from "fs";
+import path12 from "path";
 
 // node_modules/simple-git/dist/esm/index.js
 var import_file_exists = __toESM(require_dist(), 1);
@@ -2507,8 +2800,8 @@ function pathspec(...paths) {
   cache.set(key, paths);
   return key;
 }
-function isPathSpec(path14) {
-  return path14 instanceof String && cache.has(path14);
+function isPathSpec(path16) {
+  return path16 instanceof String && cache.has(path16);
 }
 function toPaths(pathSpec) {
   return cache.get(pathSpec) || [];
@@ -2594,8 +2887,8 @@ function toLinesWithContent(input = "", trimmed2 = true, separator = "\n") {
 function forEachLineWithContent(input, callback) {
   return toLinesWithContent(input, true).map((line) => callback(line));
 }
-function folderExists(path14) {
-  return (0, import_file_exists.exists)(path14, import_file_exists.FOLDER);
+function folderExists(path16) {
+  return (0, import_file_exists.exists)(path16, import_file_exists.FOLDER);
 }
 function append(target, item) {
   if (Array.isArray(target)) {
@@ -2986,8 +3279,8 @@ function checkIsRepoRootTask() {
     commands,
     format: "utf-8",
     onError,
-    parser(path14) {
-      return /^\.(git)?$/.test(path14.trim());
+    parser(path16) {
+      return /^\.(git)?$/.test(path16.trim());
     }
   };
 }
@@ -3421,11 +3714,11 @@ function parseGrep(grep) {
   const paths = /* @__PURE__ */ new Set();
   const results = {};
   forEachLineWithContent(grep, (input) => {
-    const [path14, line, preview] = input.split(NULL);
-    paths.add(path14);
-    (results[path14] = results[path14] || []).push({
+    const [path16, line, preview] = input.split(NULL);
+    paths.add(path16);
+    (results[path16] = results[path16] || []).push({
       line: asNumber(line),
-      path: path14,
+      path: path16,
       preview
     });
   });
@@ -4188,14 +4481,14 @@ var init_hash_object = __esm({
     init_task();
   }
 });
-function parseInit(bare, path14, text) {
+function parseInit(bare, path16, text) {
   const response = String(text).trim();
   let result;
   if (result = initResponseRegex.exec(response)) {
-    return new InitSummary(bare, path14, false, result[1]);
+    return new InitSummary(bare, path16, false, result[1]);
   }
   if (result = reInitResponseRegex.exec(response)) {
-    return new InitSummary(bare, path14, true, result[1]);
+    return new InitSummary(bare, path16, true, result[1]);
   }
   let gitDir = "";
   const tokens = response.split(" ");
@@ -4206,7 +4499,7 @@ function parseInit(bare, path14, text) {
       break;
     }
   }
-  return new InitSummary(bare, path14, /^re/i.test(response), gitDir);
+  return new InitSummary(bare, path16, /^re/i.test(response), gitDir);
 }
 var InitSummary;
 var initResponseRegex;
@@ -4215,9 +4508,9 @@ var init_InitSummary = __esm({
   "src/lib/responses/InitSummary.ts"() {
     "use strict";
     InitSummary = class {
-      constructor(bare, path14, existing, gitDir) {
+      constructor(bare, path16, existing, gitDir) {
         this.bare = bare;
-        this.path = path14;
+        this.path = path16;
         this.existing = existing;
         this.gitDir = gitDir;
       }
@@ -4229,7 +4522,7 @@ var init_InitSummary = __esm({
 function hasBareCommand(command) {
   return command.includes(bareCommand);
 }
-function initTask(bare = false, path14, customArgs) {
+function initTask(bare = false, path16, customArgs) {
   const commands = ["init", ...customArgs];
   if (bare && !hasBareCommand(commands)) {
     commands.splice(1, 0, bareCommand);
@@ -4238,7 +4531,7 @@ function initTask(bare = false, path14, customArgs) {
     commands,
     format: "utf-8",
     parser(text) {
-      return parseInit(commands.includes("--bare"), path14, text);
+      return parseInit(commands.includes("--bare"), path16, text);
     }
   };
 }
@@ -5049,12 +5342,12 @@ var init_FileStatusSummary = __esm({
     "use strict";
     fromPathRegex = /^(.+)\0(.+)$/;
     FileStatusSummary = class {
-      constructor(path14, index, working_dir) {
-        this.path = path14;
+      constructor(path16, index, working_dir) {
+        this.path = path16;
         this.index = index;
         this.working_dir = working_dir;
         if (index === "R" || working_dir === "R") {
-          const detail = fromPathRegex.exec(path14) || [null, path14, path14];
+          const detail = fromPathRegex.exec(path16) || [null, path16, path16];
           this.from = detail[2] || "";
           this.path = detail[1] || "";
         }
@@ -5085,14 +5378,14 @@ function splitLine(result, lineStr) {
     default:
       return;
   }
-  function data(index, workingDir, path14) {
+  function data(index, workingDir, path16) {
     const raw = `${index}${workingDir}`;
     const handler = parsers6.get(raw);
     if (handler) {
-      handler(result, path14);
+      handler(result, path16);
     }
     if (raw !== "##" && raw !== "!!") {
-      result.files.push(new FileStatusSummary(path14, index, workingDir));
+      result.files.push(new FileStatusSummary(path16, index, workingDir));
     }
   }
 }
@@ -5404,9 +5697,9 @@ var init_simple_git_api = __esm({
           next
         );
       }
-      hashObject(path14, write) {
+      hashObject(path16, write) {
         return this._runTask(
-          hashObjectTask(path14, write === true),
+          hashObjectTask(path16, write === true),
           trailingFunctionArgument(arguments)
         );
       }
@@ -6060,8 +6353,8 @@ __export(sub_module_exports, {
   subModuleTask: () => subModuleTask,
   updateSubModuleTask: () => updateSubModuleTask
 });
-function addSubModuleTask(repo, path14) {
-  return subModuleTask(["add", repo, path14]);
+function addSubModuleTask(repo, path16) {
+  return subModuleTask(["add", repo, path16]);
 }
 function initSubModuleTask(customArgs) {
   return subModuleTask(["init", ...customArgs]);
@@ -6391,8 +6684,8 @@ var require_git = __commonJS2({
       }
       return this._runTask(straightThroughStringTask2(command, this._trimmed), next);
     };
-    Git2.prototype.submoduleAdd = function(repo, path14, then) {
-      return this._runTask(addSubModuleTask2(repo, path14), trailingFunctionArgument2(arguments));
+    Git2.prototype.submoduleAdd = function(repo, path16, then) {
+      return this._runTask(addSubModuleTask2(repo, path16), trailingFunctionArgument2(arguments));
     };
     Git2.prototype.submoduleUpdate = function(args, then) {
       return this._runTask(
@@ -7024,11 +7317,11 @@ var AllFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path10.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path12.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs13.promises.access(filePath, fs13.constants.F_OK);
+          await fs15.promises.access(filePath, fs15.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -7047,8 +7340,8 @@ var AllFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/staged-files-source.js
-import fs14 from "fs";
-import path11 from "path";
+import fs16 from "fs";
+import path13 from "path";
 var StagedFilesSource = class extends BaseFileSource {
   get name() {
     return "Staged files";
@@ -7056,11 +7349,11 @@ var StagedFilesSource = class extends BaseFileSource {
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", "--cached"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path11.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path13.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs14.promises.access(filePath, fs14.constants.F_OK);
+          await fs16.promises.access(filePath, fs16.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -7079,8 +7372,8 @@ var StagedFilesSource = class extends BaseFileSource {
 };
 
 // file-sources/diff-base-source.js
-import fs15 from "fs";
-import path12 from "path";
+import fs17 from "fs";
+import path14 from "path";
 var DiffBaseSource = class extends BaseFileSource {
   get name() {
     return "Diff vs base";
@@ -7090,11 +7383,11 @@ var DiffBaseSource = class extends BaseFileSource {
     console.log(`DiffBaseSource: diffing against ${baseRef}`);
     const git = esm_default(this.repoRoot);
     const output = await git.diff(["--name-only", "--diff-filter=ACMR", baseRef]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path12.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path14.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
-          await fs15.promises.access(filePath, fs15.constants.F_OK);
+          await fs17.promises.access(filePath, fs17.constants.F_OK);
           return filePath;
         } catch {
           return null;
@@ -7141,6 +7434,7 @@ var builtinChecks = {
   AiPromptCheck,
   RegexCheck,
   FirecrawlCheck,
+  AgentCheck,
   CompositeCheck
 };
 var builtinFileSources = {
@@ -7155,9 +7449,9 @@ var builtinRegistry = {
 
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
-var __dirname = path13.dirname(__filename);
+var __dirname = path15.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "7fcd161" : "unknown";
+var LINTER_COMMIT = true ? "99b2ddb" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7182,9 +7476,9 @@ var resolveClass = async (entry) => {
   return Cls;
 };
 var loadConfig = async (mode) => {
-  const configPath = path13.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(await fs16.promises.readFile(configPath, "utf-8"));
-  const toolsDir = config.toolsDir ? path13.resolve(REPO_ROOT, config.toolsDir) : path13.join(REPO_ROOT, "tools");
+  const configPath = path15.join(REPO_ROOT, "linter-config.json");
+  const config = JSON.parse(await fs18.promises.readFile(configPath, "utf-8"));
+  const toolsDir = config.toolsDir ? path15.resolve(REPO_ROOT, config.toolsDir) : path15.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
     throw new Error(`Unknown mode "${mode}". Available: ${Object.keys(config.modes).join(", ")}`);
@@ -7210,7 +7504,7 @@ var loadConfig = async (mode) => {
   return { fileSource, checks, toolsDir };
 };
 var relPath = (file) => {
-  if (file.startsWith(REPO_ROOT + path13.sep)) {
+  if (file.startsWith(REPO_ROOT + path15.sep)) {
     return file.slice(REPO_ROOT.length + 1);
   }
   return file;
@@ -7380,23 +7674,23 @@ var installHook = () => {
     console.error("Not a git repository. Cannot install hook.");
     process.exit(1);
   }
-  const hooksDir = path13.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
-  const hookPath = path13.join(hooksDir, "pre-commit");
-  const relLinterPath = path13.relative(REPO_ROOT, __filename);
+  const hooksDir = path15.resolve(REPO_ROOT, gitDirResult.stdout.trim(), "hooks");
+  const hookPath = path15.join(hooksDir, "pre-commit");
+  const relLinterPath = path15.relative(REPO_ROOT, __filename);
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --mode hook
 `;
-  if (fs16.existsSync(hookPath)) {
+  if (fs18.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
-    fs16.copyFileSync(hookPath, backup);
-    console.log(`Existing pre-commit hook backed up to ${path13.basename(backup)}`);
+    fs18.copyFileSync(hookPath, backup);
+    console.log(`Existing pre-commit hook backed up to ${path15.basename(backup)}`);
   }
-  fs16.mkdirSync(hooksDir, { recursive: true });
-  fs16.writeFileSync(hookPath, hookContent, { mode: 493 });
-  console.log(`Installed pre-commit hook at ${path13.relative(REPO_ROOT, hookPath)}`);
+  fs18.mkdirSync(hooksDir, { recursive: true });
+  fs18.writeFileSync(hookPath, hookContent, { mode: 493 });
+  console.log(`Installed pre-commit hook at ${path15.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
-  const sep = path13.sep;
+  const sep = path15.sep;
   if (__filename.includes(`${sep}yarn${sep}global${sep}node_modules${sep}`) && __filename.includes(`node_modules${sep}@skyrim-multiplayer${sep}linter`)) {
     return "yarn";
   }
@@ -7453,20 +7747,20 @@ var upgrade = () => {
         );
       } catch {
         try {
-          fs16.unlinkSync(tmpPath);
+          fs18.unlinkSync(tmpPath);
         } catch {
         }
         console.error("Download failed.");
         process.exit(1);
       }
-      const head = fs16.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      const head = fs18.readFileSync(tmpPath, "utf-8").slice(0, 100);
       if (!head.startsWith("#!/")) {
-        fs16.unlinkSync(tmpPath);
+        fs18.unlinkSync(tmpPath);
         console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
         process.exit(1);
       }
-      fs16.renameSync(tmpPath, __filename);
-      fs16.chmodSync(__filename, 493);
+      fs18.renameSync(tmpPath, __filename);
+      fs18.chmodSync(__filename, 493);
       console.log(`Updated ${__filename}`);
       try {
         execSync(`node "${__filename}" --version`, { stdio: "inherit" });
@@ -7527,8 +7821,8 @@ var printHelp = () => {
   console.log(lines.join("\n"));
 };
 var initConfig = () => {
-  const configPath = path13.join(REPO_ROOT, "linter-config.json");
-  if (fs16.existsSync(configPath)) {
+  const configPath = path15.join(REPO_ROOT, "linter-config.json");
+  if (fs18.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
   }
@@ -7547,8 +7841,8 @@ var initConfig = () => {
     },
     checks: checkEntries
   };
-  fs16.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
-  console.log(`Created ${path13.relative(REPO_ROOT, configPath)}`);
+  fs18.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  console.log(`Created ${path15.relative(REPO_ROOT, configPath)}`);
 };
 (async () => {
   const args = process.argv.slice(2);

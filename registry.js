@@ -14,6 +14,7 @@ import { CodegenCheck } from "./checks/codegen-check.js";
 import { AiPromptCheck } from "./checks/ai-prompt-check.js";
 import { RegexCheck } from "./checks/regex-check.js";
 import { FirecrawlCheck } from "./checks/firecrawl-check.js";
+import { AgentCheck } from "./checks/agent-check.js";
 import { CompositeCheck } from "./checks/composite-check.js";
 
 // --- file sources ---
@@ -30,6 +31,7 @@ export const builtinChecks = {
   AiPromptCheck,
   RegexCheck,
   FirecrawlCheck,
+  AgentCheck,
   CompositeCheck,
 };
 
