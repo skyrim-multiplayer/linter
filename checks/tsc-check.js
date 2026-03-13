@@ -15,17 +15,28 @@ const execFileAsync = promisify(execFile);
  * per-file calls return the cached result for that file.
  *
  * Options (linter-config.json):
- *   tsconfigPath — path to tsconfig.json relative to repo root
- *                  (default: "tsconfig.json")
+ *   tsconfigPath  — path to tsconfig.json relative to repo root
+ *                   (default: "tsconfig.json")
+ *   errorMessages — array of { pattern, message } objects.  When a tsc
+ *                   diagnostic line matches `pattern` (regex string), the
+ *                   custom `message` is appended after that line so that
+ *                   coding agents get actionable guidance instead of raw
+ *                   type errors.
  */
 export class TscCheck extends BaseCheck {
   #tsconfigPath;
+  /** @type {{ re: RegExp, message: string }[]} */
+  #errorMessages;
   /** @type {Promise<Map<string, string[]>> | null} */
   #resultPromise = null;
 
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     this.#tsconfigPath = options.tsconfigPath ?? "tsconfig.json";
+    this.#errorMessages = (options.errorMessages || []).map((e) => ({
+      re: new RegExp(e.pattern),
+      message: e.message,
+    }));
   }
 
   get name() {
@@ -83,7 +94,7 @@ export class TscCheck extends BaseCheck {
             if (match) {
               const absFile = path.resolve(this.repoRoot, match[1]);
               if (!errors.has(absFile)) errors.set(absFile, []);
-              errors.get(absFile).push(line);
+              errors.get(absFile).push(this.#annotate(line));
             }
           }
           // If we couldn't parse any per-file errors, report globally
@@ -95,6 +106,18 @@ export class TscCheck extends BaseCheck {
       })();
     }
     return this.#resultPromise;
+  }
+
+  /**
+   * If the line matches any errorMessages pattern, append the custom message.
+   */
+  #annotate(line) {
+    for (const { re, message } of this.#errorMessages) {
+      if (re.test(line)) {
+        return `${line}\n  >>> ${message}`;
+      }
+    }
+    return line;
   }
 
   async lint(file, deps) {
@@ -126,7 +149,8 @@ export class TscCheck extends BaseCheck {
         "Runs tsc --noEmit to type-check the project. Reports per-file " +
         "TypeScript errors. No autofix available.",
       options:
-        'tsconfigPath — path to tsconfig.json relative to repo root (default: "tsconfig.json")',
+        'tsconfigPath — path to tsconfig.json relative to repo root (default: "tsconfig.json")\n' +
+        'errorMessages — array of { pattern, message }; when a tsc error matches the regex pattern, the custom message is appended',
     };
   }
 }

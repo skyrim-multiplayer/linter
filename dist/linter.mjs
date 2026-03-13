@@ -2731,11 +2731,17 @@ import { promisify as promisify4 } from "util";
 var execFileAsync4 = promisify4(execFile5);
 var TscCheck = class extends BaseCheck {
   #tsconfigPath;
+  /** @type {{ re: RegExp, message: string }[]} */
+  #errorMessages;
   /** @type {Promise<Map<string, string[]>> | null} */
   #resultPromise = null;
   constructor(repoRoot, options = {}) {
     super(repoRoot, options);
     this.#tsconfigPath = options.tsconfigPath ?? "tsconfig.json";
+    this.#errorMessages = (options.errorMessages || []).map((e) => ({
+      re: new RegExp(e.pattern),
+      message: e.message
+    }));
   }
   get name() {
     return "TypeScript";
@@ -2783,7 +2789,7 @@ var TscCheck = class extends BaseCheck {
             if (match) {
               const absFile = path12.resolve(this.repoRoot, match[1]);
               if (!errors.has(absFile)) errors.set(absFile, []);
-              errors.get(absFile).push(line);
+              errors.get(absFile).push(this.#annotate(line));
             }
           }
           if (errors.size === 0 && output.trim()) {
@@ -2794,6 +2800,18 @@ var TscCheck = class extends BaseCheck {
       })();
     }
     return this.#resultPromise;
+  }
+  /**
+   * If the line matches any errorMessages pattern, append the custom message.
+   */
+  #annotate(line) {
+    for (const { re, message } of this.#errorMessages) {
+      if (re.test(line)) {
+        return `${line}
+  >>> ${message}`;
+      }
+    }
+    return line;
   }
   async lint(file, deps) {
     const errors = await this.#runTsc(deps);
@@ -2815,7 +2833,7 @@ var TscCheck = class extends BaseCheck {
     return {
       name: "TscCheck",
       description: "Runs tsc --noEmit to type-check the project. Reports per-file TypeScript errors. No autofix available.",
-      options: 'tsconfigPath \u2014 path to tsconfig.json relative to repo root (default: "tsconfig.json")'
+      options: 'tsconfigPath \u2014 path to tsconfig.json relative to repo root (default: "tsconfig.json")\nerrorMessages \u2014 array of { pattern, message }; when a tsc error matches the regex pattern, the custom message is appended'
     };
   }
 };
@@ -7548,7 +7566,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "a736103" : "unknown";
+var LINTER_COMMIT = true ? "4c0739a" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
