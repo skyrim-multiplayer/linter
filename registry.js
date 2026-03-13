@@ -16,6 +16,7 @@ import { RegexCheck } from "./checks/regex-check.js";
 import { FirecrawlCheck } from "./checks/firecrawl-check.js";
 import { AgentCheck } from "./checks/agent-check.js";
 import { CompositeCheck } from "./checks/composite-check.js";
+import { TscCheck } from "./checks/tsc-check.js";
 
 // --- file sources ---
 import { AllFilesSource } from "./file-sources/all-files-source.js";
@@ -33,6 +34,7 @@ export const builtinChecks = {
   FirecrawlCheck,
   AgentCheck,
   CompositeCheck,
+  TscCheck,
 };
 
 export const builtinFileSources = {
