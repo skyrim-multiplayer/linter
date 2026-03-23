@@ -7562,11 +7562,174 @@ var builtinRegistry = {
   ...builtinFileSources
 };
 
+// agent-server.js
+import http from "http";
+import crypto2 from "crypto";
+var AI_PROVIDERS2 = {
+  claude: ClaudeProvider,
+  gemini: GeminiProvider
+};
+async function startAgentServer(options = {}) {
+  const port = options.port || 3e3;
+  const apiKey = options.apiKey || null;
+  const providerName = (options.aiProvider || "claude").toLowerCase();
+  const repoRoot = options.repoRoot || process.cwd();
+  const ProviderClass = AI_PROVIDERS2[providerName];
+  if (!ProviderClass) {
+    throw new Error(`Unknown aiProvider "${providerName}". Available: ${Object.keys(AI_PROVIDERS2).join(", ")}`);
+  }
+  const provider = new ProviderClass();
+  const tasks = /* @__PURE__ */ new Map();
+  function processTask(taskId, payload) {
+    const { prompt, mode, primaryFile, files } = payload;
+    let context = "";
+    if (files && typeof files === "object") {
+      for (const [filePath, content] of Object.entries(files)) {
+        context += `--- ${filePath} ---
+${content}
+
+`;
+      }
+    }
+    let aiPrompt;
+    if (mode === "lint") {
+      aiPrompt = `You are a code review assistant.
+Primary file: ${primaryFile}
+Instruction: ${prompt}
+
+${context}
+Respond with ONLY a JSON object (no markdown fences):
+{ "pass": true/false, "reason": "short explanation" }`;
+    } else {
+      aiPrompt = `You are a code fixing assistant.
+Primary file: ${primaryFile}
+Instruction: ${prompt}
+
+${context}
+Evaluate the file and fix it if needed.
+Respond with ONLY a JSON object (no markdown fences):
+If the file is fine: { "pass": true, "reason": "short explanation" }
+If fixes are needed: { "pass": false, "reason": "what was wrong", "files": { "relative/path": "full new content", ... } }
+Only include files that actually changed.`;
+    }
+    tasks.get(taskId).status = "running";
+    provider.call(aiPrompt, { cwd: repoRoot }).then(
+      (reply) => {
+        let parsed;
+        try {
+          const jsonMatch = reply.match(/\{[\s\S]*\}/);
+          parsed = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
+        } catch {
+          tasks.set(taskId, { status: "failed", error: `AI returned invalid JSON: ${reply.slice(0, 500)}` });
+          return;
+        }
+        tasks.set(taskId, { status: "completed", result: parsed });
+      },
+      (err) => {
+        tasks.set(taskId, { status: "failed", error: err.message });
+      }
+    );
+  }
+  function readBody(req) {
+    return new Promise((resolve, reject) => {
+      const chunks = [];
+      let size = 0;
+      const MAX_BODY = 10 * 1024 * 1024;
+      req.on("data", (chunk) => {
+        size += chunk.length;
+        if (size > MAX_BODY) {
+          req.destroy();
+          reject(new Error("Request body too large"));
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
+      req.on("error", reject);
+    });
+  }
+  function sendJson(res, status, body) {
+    const data = JSON.stringify(body);
+    res.writeHead(status, {
+      "Content-Type": "application/json",
+      "Content-Length": Buffer.byteLength(data)
+    });
+    res.end(data);
+  }
+  function checkAuth(req, res) {
+    if (!apiKey) return true;
+    const auth = req.headers.authorization || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    if (token !== apiKey) {
+      sendJson(res, 401, { error: "Unauthorized" });
+      return false;
+    }
+    return true;
+  }
+  const server = http.createServer(async (req, res) => {
+    try {
+      const url = new URL(req.url, `http://${req.headers.host}`);
+      const pathname = url.pathname.replace(/\/+$/, "");
+      if (req.method === "POST" && pathname === "/tasks") {
+        if (!checkAuth(req, res)) return;
+        let payload;
+        try {
+          const body = await readBody(req);
+          payload = JSON.parse(body);
+        } catch (err) {
+          sendJson(res, 400, { error: `Invalid JSON: ${err.message}` });
+          return;
+        }
+        if (!payload.prompt || !payload.primaryFile) {
+          sendJson(res, 400, { error: "Missing required fields: prompt, primaryFile" });
+          return;
+        }
+        const taskId = crypto2.randomUUID();
+        tasks.set(taskId, { status: "pending" });
+        sendJson(res, 201, { taskId, status: "pending" });
+        processTask(taskId, payload);
+        return;
+      }
+      const taskMatch = pathname.match(/^\/tasks\/([^/]+)$/);
+      if (req.method === "GET" && taskMatch) {
+        if (!checkAuth(req, res)) return;
+        const taskId = decodeURIComponent(taskMatch[1]);
+        const task = tasks.get(taskId);
+        if (!task) {
+          sendJson(res, 404, { error: "Task not found" });
+          return;
+        }
+        sendJson(res, 200, { taskId, ...task });
+        if (task.status === "completed" || task.status === "failed") {
+          tasks.delete(taskId);
+        }
+        return;
+      }
+      sendJson(res, 404, { error: "Not found" });
+    } catch (err) {
+      sendJson(res, 500, { error: "Internal server error" });
+    }
+  });
+  return new Promise((resolve, reject) => {
+    server.on("error", reject);
+    server.listen(port, () => {
+      console.log(`Agent server listening on http://localhost:${port}`);
+      console.log(`AI provider: ${provider.name}`);
+      if (apiKey) {
+        console.log(`API key: configured`);
+      } else {
+        console.log(`API key: none (open access)`);
+      }
+      resolve(server);
+    });
+  });
+}
+
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "4c0739a" : "unknown";
+var LINTER_COMMIT = true ? "65f3b83" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7897,6 +8060,7 @@ var printHelp = () => {
   lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
+  lines.push("  --serve-agent         Start the agent server for AgentCheck");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
   lines.push("  --upgrade             Upgrade to the latest version");
@@ -7906,6 +8070,9 @@ var printHelp = () => {
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("  --port <number>       Port for --serve-agent (default: 3000)");
+  lines.push("  --agent-api-key <key> API key for --serve-agent (prefix with $ to read env var)");
+  lines.push("  --ai-provider <name>  AI provider for --serve-agent: claude (default) or gemini");
   lines.push("");
   lines.push("BUILT-IN CHECKS:");
   for (const [exportName, Cls] of Object.entries(builtinChecks)) {
@@ -7980,6 +8147,19 @@ var initConfig = () => {
   if (args.includes("--init")) {
     initConfig();
     process.exit(0);
+  }
+  if (args.includes("--serve-agent")) {
+    const portIdx = args.indexOf("--port");
+    const port = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : 3e3;
+    const keyIdx = args.indexOf("--agent-api-key");
+    let agentApiKey = keyIdx !== -1 && args[keyIdx + 1] ? args[keyIdx + 1] : null;
+    if (agentApiKey && agentApiKey.startsWith("$")) {
+      agentApiKey = process.env[agentApiKey.slice(1)] || null;
+    }
+    const provIdx = args.indexOf("--ai-provider");
+    const aiProvider = provIdx !== -1 && args[provIdx + 1] ? args[provIdx + 1] : "claude";
+    await startAgentServer({ port, apiKey: agentApiKey, aiProvider, repoRoot: REPO_ROOT });
+    return;
   }
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");

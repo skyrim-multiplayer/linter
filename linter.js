@@ -7,6 +7,7 @@ import pLimit from "p-limit";
 import { ensureCleanExit } from "./util.js";
 import { builtinRegistry, builtinChecks, builtinFileSources } from "./registry.js";
 import { CompositeCheck } from "./checks/composite-check.js";
+import { startAgentServer } from "./agent-server.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -456,6 +457,7 @@ const printHelp = () => {
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
 
+  lines.push("  --serve-agent         Start the agent server for AgentCheck");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
   lines.push("  --upgrade             Upgrade to the latest version");
@@ -466,6 +468,9 @@ const printHelp = () => {
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("  --port <number>       Port for --serve-agent (default: 3000)");
+  lines.push("  --agent-api-key <key> API key for --serve-agent (prefix with $ to read env var)");
+  lines.push("  --ai-provider <name>  AI provider for --serve-agent: claude (default) or gemini");
   lines.push("");
 
   // --- Built-in checks ---
@@ -547,10 +552,14 @@ const initConfig = () => {
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
  *   --install-hook   Install as a git pre-commit hook and exit
+ *   --serve-agent    Start the agent server for AgentCheck
  *   --help           Show help message
  *   --version        Show version and install method
  *   --upgrade        Upgrade to the latest version
  *   --init           Generate minimal linter-config.json
+ *   --port <n>       Port for agent server (default: 3000)
+ *   --agent-api-key  API key for agent server
+ *   --ai-provider    AI provider: claude or gemini
 
  */
 (async () => {
@@ -579,6 +588,24 @@ const initConfig = () => {
   if (args.includes("--init")) {
     initConfig();
     process.exit(0);
+  }
+
+  if (args.includes("--serve-agent")) {
+    const portIdx = args.indexOf("--port");
+    const port = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : 3000;
+
+    const keyIdx = args.indexOf("--agent-api-key");
+    let agentApiKey = keyIdx !== -1 && args[keyIdx + 1] ? args[keyIdx + 1] : null;
+    if (agentApiKey && agentApiKey.startsWith("$")) {
+      agentApiKey = process.env[agentApiKey.slice(1)] || null;
+    }
+
+    const provIdx = args.indexOf("--ai-provider");
+    const aiProvider = provIdx !== -1 && args[provIdx + 1] ? args[provIdx + 1] : "claude";
+
+    await startAgentServer({ port, apiKey: agentApiKey, aiProvider, repoRoot: REPO_ROOT });
+    // Server keeps the process alive; no exit.
+    return;
   }
 
 
