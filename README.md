@@ -11,7 +11,7 @@ The bundled linter is a single ESM file (`dist/linter.mjs`) with no runtime depe
 Install from the repo at a specific commit:
 
 ```sh
-yarn global add "https://github.com/skyrim-multiplayer/linter#<commit>"
+yarn global add "https://github.com/skyrim-multiplayer/linter#main"
 ```
 
 This makes `skymp-linter` available on your PATH:
