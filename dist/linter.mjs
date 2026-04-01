@@ -25945,14 +25945,12 @@ var RegexCheck = class extends BaseCheck {
     if (!options.pattern) {
       throw new Error("RegexCheck requires a 'pattern' option");
     }
-    const flags = options.patternFlags ?? "g";
-    this.#pattern = new RegExp(options.pattern, flags);
+    const flags = options.patternFlags || "g";
+    this.#pattern = new RegExp(options.pattern, flags.includes("g") ? flags : flags + "g");
     this.#replacement = options.replacement ?? null;
     this.#message = options.message ?? "regex violation";
     this.#multiline = !!options.multiline;
-    this.#skipLineRes = (options.skipLinePatterns || []).map(
-      (p) => new RegExp(p)
-    );
+    this.#skipLineRes = (options.skipLinePatterns || []).map((p) => new RegExp(p));
   }
   get name() {
     return this.#message;
@@ -25969,22 +25967,28 @@ var RegexCheck = class extends BaseCheck {
     try {
       const content = await fs12.readFile(file, "utf-8");
       const violations = [];
+      const re = new RegExp(this.#pattern.source, this.#pattern.flags);
       if (this.#multiline) {
-        const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+        const lineOffsets = [0];
+        for (let i = 0; i < content.length; i++) {
+          if (content[i] === "\n") lineOffsets.push(i + 1);
+        }
         let m;
         while ((m = re.exec(content)) !== null) {
-          const lineNo = content.slice(0, m.index).split("\n").length;
-          violations.push(`  line ${lineNo}: ${m[0].length > 80 ? m[0].slice(0, 80) + "\u2026" : m[0]}`);
-          if (!re.global) break;
+          const lineNo = lineOffsets.filter((offset) => offset <= m.index).length;
+          const matchText = m[0].length > 80 ? m[0].slice(0, 80) + "\u2026" : m[0];
+          violations.push(`  line ${lineNo}: ${matchText.replace(/\n/g, "\\n")}`);
         }
       } else {
-        for (const [lineNo, line] of content.split("\n").entries()) {
-          if (this.#skipLineRes.some((re2) => re2.test(line))) continue;
-          const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+        const lines = content.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          if (this.#skipLineRes.some((skip) => skip.test(line))) continue;
+          re.lastIndex = 0;
           let m;
           while ((m = re.exec(line)) !== null) {
-            violations.push(`  line ${lineNo + 1}: ${m[0]}`);
-            if (!re.global) break;
+            violations.push(`  line ${i + 1}: ${m[0]}`);
+            if (!re.flags.includes("g")) break;
           }
         }
       }
@@ -26001,9 +26005,7 @@ ${violations.join("\n")}`
     }
   }
   async fix(file) {
-    if (!this.#replacement) {
-      return this.lint(file);
-    }
+    if (!this.#replacement) return this.lint(file);
     try {
       const original = await fs12.readFile(file, "utf-8");
       const replacement = this.resolveTemplate(this.#replacement, {
@@ -26011,14 +26013,13 @@ ${violations.join("\n")}`
         repoRoot: this.repoRoot
       });
       let fixed;
-      if (this.#multiline) {
-        const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+      const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+      if (this.#multiline || this.#skipLineRes.length === 0) {
         fixed = original.replace(re, replacement);
       } else {
         const lines = original.split("\n");
         fixed = lines.map((line) => {
-          if (this.#skipLineRes.some((re2) => re2.test(line))) return line;
-          const re = new RegExp(this.#pattern.source, this.#pattern.flags);
+          if (this.#skipLineRes.some((skip) => skip.test(line))) return line;
           return line.replace(re, replacement);
         }).join("\n");
       }
@@ -26034,8 +26035,8 @@ ${violations.join("\n")}`
   static getHelp() {
     return {
       name: "RegexCheck",
-      description: "Generic regex-based check. Finds lines matching a pattern and optionally auto-fixes them using a replacement string. Fully configured via options in linter-config.json.",
-      options: 'pattern \u2014 regex to match violations (required)\n    patternFlags \u2014 regex flags (default: "g")\n    replacement \u2014 replacement string for fix mode ($1, $2, \u2026 for groups; supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates)\n    multiline \u2014 if true, regex operates on entire file content instead of per-line (default: false)\n    message \u2014 error message (default: "regex violation")\n    skipLinePatterns \u2014 array of regex strings; matching lines are skipped (ignored when multiline is true)'
+      description: "Generic regex-based check and fix.",
+      options: "pattern, patternFlags, replacement, multiline, message, skipLinePatterns"
     };
   }
 };
@@ -31501,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "0ab943f" : "unknown";
+var LINTER_COMMIT = true ? "3eceb23" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
