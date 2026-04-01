@@ -455,7 +455,13 @@ const printHelp = () => {
   lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
-
+  lines.push("  --server              Start HTTP agent server (compatible with AgentCheck)");
+  lines.push("");
+  lines.push("SERVER OPTIONS (used with --server):");
+  lines.push("  --port <number>       Port to listen on (default: 3000)");
+  lines.push("  --api-key <key>       Bearer token required by clients (required)");
+  lines.push("  --provider <name>     AI provider: claude (default) or gemini");
+  lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
   lines.push("  --upgrade             Upgrade to the latest version");
@@ -543,6 +549,10 @@ const initConfig = () => {
  *   --verbose        Show [PASS] lines (hidden by default)
  *   --lint           Run checks in read-only mode (exit 1 on failure)
  *   --fix            Run checks in fix mode (modify files in-place)
+ *   --server         Start HTTP agent server (compatible with AgentCheck)
+ *   --port <number>  Server port (default: 3000)
+ *   --api-key <key>  Bearer token for server auth (required with --server)
+ *   --provider <n>   AI provider for server: claude (default) or gemini
  *   --no-download    Do not download tools if missing
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
@@ -551,7 +561,6 @@ const initConfig = () => {
  *   --version        Show version and install method
  *   --upgrade        Upgrade to the latest version
  *   --init           Generate minimal linter-config.json
-
  */
 (async () => {
   const args = process.argv.slice(2);
@@ -581,7 +590,27 @@ const initConfig = () => {
     process.exit(0);
   }
 
+  if (args.includes("--server")) {
+    const portIndex = args.indexOf("--port");
+    const port = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 3000;
 
+    const keyIndex = args.indexOf("--api-key");
+    const apiKey = keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null;
+    if (!apiKey) {
+      console.error("--server requires --api-key <key>");
+      process.exit(1);
+    }
+
+    const providerIndex = args.indexOf("--provider");
+    const provider = providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : "claude";
+
+    const { createAgentServer } = await import("./agent-server.js");
+    const app = createAgentServer({ apiKey, provider });
+    app.listen(port, () => {
+      console.log(`Agent server listening on port ${port} (provider: ${provider})`);
+    });
+    return; // keep process alive
+  }
 
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
