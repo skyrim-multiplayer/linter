@@ -162,6 +162,10 @@ export class AgentCheck extends BaseCheck {
       return { status: "error", output: written.error };
     }
 
+    if (written.paths.length === 0) {
+      return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
+    }
+
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
 
     const extras = written.paths.filter((p) => p !== absFile);
@@ -216,6 +220,10 @@ export class AgentCheck extends BaseCheck {
     const written = await this.#applyFiles(result.files);
     if (written.error) {
       return { status: "error", output: written.error };
+    }
+
+    if (written.paths.length === 0) {
+      return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
     }
 
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
@@ -348,20 +356,31 @@ export class AgentCheck extends BaseCheck {
 
   /**
    * Minimal glob matcher for path filtering.
-   * Supports: ** (any path segments), * (any chars within one segment).
+   * Supports: **\/ (zero or more path segments), ** (catch-all), * (within one segment).
    */
   #matchGlob(pattern, filePath) {
-    // Escape regex specials except * and **
-    const regexStr = pattern
-      .split("**")
-      .map((segment) =>
-        segment
-          .split("*")
-          .map((s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&"))
-          .join("[^/]*")
-      )
-      .join(".*");
-    return new RegExp(`^${regexStr}$`).test(filePath);
+    const p = pattern.replace(/\\/g, "/");
+    const f = filePath.replace(/\\/g, "/");
+    let regex = "";
+    let i = 0;
+    while (i < p.length) {
+      if (p[i] === "*" && p[i + 1] === "*") {
+        if (p[i + 2] === "/") {
+          regex += "(?:.+/)?"; // **/ = zero or more path segments
+          i += 3;
+        } else {
+          regex += ".*"; // ** at end
+          i += 2;
+        }
+      } else if (p[i] === "*") {
+        regex += "[^/]*";
+        i++;
+      } else {
+        regex += p[i].replace(/[.+^${}()|[\]\\]/g, "\\$&");
+        i++;
+      }
+    }
+    return new RegExp(`^${regex}$`).test(f);
   }
 
   // ── Help ────────────────────────────────────────────────────────────

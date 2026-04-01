@@ -1,5 +1,6 @@
 import express from "express";
 import { randomUUID } from "crypto";
+import os from "os";
 import { ClaudeProvider } from "./ai-providers/claude.js";
 import { GeminiProvider } from "./ai-providers/gemini.js";
 import { EchoProvider } from "./ai-providers/echo.js";
@@ -17,12 +18,14 @@ const AI_PROVIDERS = {
  *
  * @param {{ apiKey: string, provider?: string }} options
  */
-export function createAgentServer({ apiKey, provider = "claude" }) {
+export function createAgentServer({ apiKey, provider = "claude", model = null }) {
   const ProviderClass = AI_PROVIDERS[provider.toLowerCase()];
   if (!ProviderClass) {
     throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(AI_PROVIDERS).join(", ")}`);
   }
-  const aiProvider = new ProviderClass();
+  const aiProvider = provider.toLowerCase() === "gemini"
+    ? new ProviderClass(model)
+    : new ProviderClass();
 
   const app = express();
   app.use(express.json({ limit: "10mb" }));
@@ -114,7 +117,7 @@ async function processTask(task, { prompt, mode, primaryFile, files }, aiProvide
         `If a fix is applied, set pass to false and include only the changed files in "files".`;
     }
 
-    const reply = await aiProvider.call(fullPrompt);
+    const reply = await aiProvider.call(fullPrompt, { cwd: os.tmpdir() });
 
     let result;
     try {

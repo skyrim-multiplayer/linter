@@ -461,6 +461,7 @@ const printHelp = () => {
   lines.push("  --port <number>       Port to listen on (default: 3000)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
   lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
+  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
@@ -604,10 +605,14 @@ const initConfig = () => {
     const providerIndex = args.indexOf("--provider");
     const provider = providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : "claude";
 
+    const modelIndex = args.indexOf("--model");
+    const model = modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null;
+
     const { createAgentServer } = await import("./agent-server.js");
-    const app = createAgentServer({ apiKey, provider });
+    const app = createAgentServer({ apiKey, provider, model });
     app.listen(port, () => {
-      console.log(`Agent server listening on port ${port} (provider: ${provider})`);
+      const modelStr = model ? ` model: ${model}` : "";
+      console.log(`Agent server listening on port ${port} (provider: ${provider}${modelStr})`);
     });
     return; // keep process alive
   }

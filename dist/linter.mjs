@@ -152,22 +152,29 @@ var init_gemini = __esm({
   "ai-providers/gemini.js"() {
     init_base_ai_provider();
     GeminiProvider = class extends BaseAiProvider {
+      #model;
+      constructor(model) {
+        super();
+        this.#model = model || null;
+      }
       get name() {
-        return "Gemini CLI";
+        return this.#model ? `Gemini CLI (${this.#model})` : "Gemini CLI";
       }
       checkDeps() {
         return true;
       }
       /**
-       * Send a prompt to `gemini` via stdin and return the response.
-       * The Gemini CLI detects non-TTY stdin and uses it as a headless prompt.
+       * Send a prompt to `gemini` in headless mode (-p) and return the response.
+       * Uses -m to select model when configured.
        * @param {string} prompt
        * @param {{ cwd?: string }} options
        * @returns {Promise<string>}
        */
       async call(prompt, options = {}) {
         return new Promise((resolve, reject) => {
-          const proc = spawn2("gemini", [], {
+          const args = [];
+          if (this.#model) args.push("-m", this.#model);
+          const proc = spawn2("gemini", args, {
             cwd: options.cwd,
             stdio: ["pipe", "pipe", "pipe"]
           });
@@ -203,7 +210,7 @@ var init_gemini = __esm({
       static getHelp() {
         return {
           name: "GeminiProvider",
-          description: "Invokes the Gemini CLI (gemini) to get AI responses via stdin in headless mode."
+          description: "Invokes the Gemini CLI via stdin in headless mode. Supports model selection via constructor."
         };
       }
     };
@@ -23960,12 +23967,13 @@ __export(agent_server_exports, {
   createAgentServer: () => createAgentServer
 });
 import { randomUUID } from "crypto";
-function createAgentServer({ apiKey, provider = "claude" }) {
+import os4 from "os";
+function createAgentServer({ apiKey, provider = "claude", model = null }) {
   const ProviderClass = AI_PROVIDERS2[provider.toLowerCase()];
   if (!ProviderClass) {
     throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(AI_PROVIDERS2).join(", ")}`);
   }
-  const aiProvider = new ProviderClass();
+  const aiProvider = provider.toLowerCase() === "gemini" ? new ProviderClass(model) : new ProviderClass();
   const app = (0, import_express.default)();
   app.use(import_express.default.json({ limit: "10mb" }));
   const tasks = /* @__PURE__ */ new Map();
@@ -24031,7 +24039,7 @@ ${fileContext}
 
 Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation", "files": { "<relPath>": "<full new file content>" } }. If no fix is needed, set pass to true and omit files. If a fix is applied, set pass to false and include only the changed files in "files".`;
     }
-    const reply = await aiProvider.call(fullPrompt);
+    const reply = await aiProvider.call(fullPrompt, { cwd: os4.tmpdir() });
     let result;
     try {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
@@ -25651,6 +25659,9 @@ var AgentCheck = class extends BaseCheck {
     if (written.error) {
       return { status: "error", output: written.error };
     }
+    if (written.paths.length === 0) {
+      return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
+    }
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
     const extras = written.paths.filter((p) => p !== absFile);
     if (this.#lock) extras.push(lockPath);
@@ -25695,6 +25706,9 @@ Fix instruction: ${this.#fixPrompt}`,
     const written = await this.#applyFiles(result.files);
     if (written.error) {
       return { status: "error", output: written.error };
+    }
+    if (written.paths.length === 0) {
+      return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
     }
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
     const extras = written.paths.filter((p) => p !== absFile);
@@ -25795,13 +25809,31 @@ Fix instruction: ${this.#fixPrompt}`,
   }
   /**
    * Minimal glob matcher for path filtering.
-   * Supports: ** (any path segments), * (any chars within one segment).
+   * Supports: **\/ (zero or more path segments), ** (catch-all), * (within one segment).
    */
   #matchGlob(pattern, filePath) {
-    const regexStr = pattern.split("**").map(
-      (segment) => segment.split("*").map((s) => s.replace(/[.+^${}()|[\]\\]/g, "\\$&")).join("[^/]*")
-    ).join(".*");
-    return new RegExp(`^${regexStr}$`).test(filePath);
+    const p = pattern.replace(/\\/g, "/");
+    const f = filePath.replace(/\\/g, "/");
+    let regex = "";
+    let i = 0;
+    while (i < p.length) {
+      if (p[i] === "*" && p[i + 1] === "*") {
+        if (p[i + 2] === "/") {
+          regex += "(?:.+/)?";
+          i += 3;
+        } else {
+          regex += ".*";
+          i += 2;
+        }
+      } else if (p[i] === "*") {
+        regex += "[^/]*";
+        i++;
+      } else {
+        regex += p[i].replace(/[.+^${}()|[\]\\]/g, "\\$&");
+        i++;
+      }
+    }
+    return new RegExp(`^${regex}$`).test(f);
   }
   // ── Help ────────────────────────────────────────────────────────────
   static getHelp() {
@@ -30558,13 +30590,25 @@ var BaseFileSource = class {
 
 // file-sources/all-files-source.js
 var AllFilesSource = class extends BaseFileSource {
+  #includePatterns;
+  #excludePatterns;
+  constructor(repoRoot, options = {}) {
+    super(repoRoot, options);
+    const coerceArray2 = (v) => v == null ? [] : Array.isArray(v) ? v : [v];
+    this.#includePatterns = coerceArray2(options.include);
+    this.#excludePatterns = coerceArray2(options.exclude);
+  }
   get name() {
     return "All tracked files";
   }
   async resolve() {
     const git = esm_default(this.repoRoot);
     const output = await git.raw(["ls-files"]);
-    const files = output.split("\n").filter((f) => f.trim() !== "").map((f) => path13.resolve(this.repoRoot, f));
+    const files = output.split("\n").filter((f) => f.trim() !== "").filter((rel) => {
+      if (this.#includePatterns.length > 0 && !this.#includePatterns.some((p) => matchGlob(p, rel))) return false;
+      if (this.#excludePatterns.some((p) => matchGlob(p, rel))) return false;
+      return true;
+    }).map((f) => path13.resolve(this.repoRoot, f));
     const existing = await Promise.all(
       files.map(async (filePath) => {
         try {
@@ -30581,10 +30625,34 @@ var AllFilesSource = class extends BaseFileSource {
     return {
       name: "AllFilesSource",
       description: "All git-tracked files in the repo. Typical use: manual full-repo check.",
-      options: "(none)"
+      options: 'include \u2014 glob pattern(s) to include (e.g. ["**/*.ts"]); exclude \u2014 glob pattern(s) to exclude'
     };
   }
 };
+function matchGlob(pattern, filePath) {
+  const p = pattern.replace(/\\/g, "/");
+  const f = filePath.replace(/\\/g, "/");
+  let regex = "";
+  let i = 0;
+  while (i < p.length) {
+    if (p[i] === "*" && p[i + 1] === "*") {
+      if (p[i + 2] === "/") {
+        regex += "(?:.+/)?";
+        i += 3;
+      } else {
+        regex += ".*";
+        i += 2;
+      }
+    } else if (p[i] === "*") {
+      regex += "[^/]*";
+      i++;
+    } else {
+      regex += p[i].replace(/[.+^${}()|[\]\\]/g, "\\$&");
+      i++;
+    }
+  }
+  return new RegExp(`^${regex}$`).test(f);
+}
 
 // file-sources/staged-files-source.js
 import fs16 from "fs";
@@ -30699,7 +30767,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "bc46b55" : "unknown";
+var LINTER_COMMIT = true ? "30b5d76" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31036,6 +31104,7 @@ var printHelp = () => {
   lines.push("  --port <number>       Port to listen on (default: 3000)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
   lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
+  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
@@ -31132,10 +31201,13 @@ var initConfig = () => {
     }
     const providerIndex = args.indexOf("--provider");
     const provider = providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : "claude";
+    const modelIndex = args.indexOf("--model");
+    const model = modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null;
     const { createAgentServer: createAgentServer2 } = await Promise.resolve().then(() => (init_agent_server(), agent_server_exports));
-    const app = createAgentServer2({ apiKey, provider });
+    const app = createAgentServer2({ apiKey, provider, model });
     app.listen(port, () => {
-      console.log(`Agent server listening on port ${port} (provider: ${provider})`);
+      const modelStr = model ? ` model: ${model}` : "";
+      console.log(`Agent server listening on port ${port} (provider: ${provider}${modelStr})`);
     });
     return;
   }
