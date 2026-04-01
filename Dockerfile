@@ -1,7 +1,7 @@
 FROM node:22-slim
 
-# Install Gemini CLI (for gemini provider)
-RUN npm install -g @google/gemini-cli
+# Install AI provider CLIs
+RUN npm install -g @google/gemini-cli @anthropic-ai/claude-code
 
 WORKDIR /app
 
