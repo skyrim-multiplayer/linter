@@ -45,11 +45,15 @@ export class CompositeCheck extends BaseCheck {
   }
 
   async fix(file, deps) {
-    return this.#fixer.fix(file, deps);
+    return this.lintAndFix(file, deps);
   }
 
-  async lintAndFix() {
-    return null;
+  async lintAndFix(file, deps) {
+    const lintRes = await this.#linter.lint(file, deps);
+    if (lintRes.status !== "fail") {
+      return lintRes;
+    }
+    return this.#fixer.fix(file, deps);
   }
 
   static getHelp() {

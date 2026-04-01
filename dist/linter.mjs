@@ -26605,10 +26605,14 @@ var CompositeCheck = class extends BaseCheck {
     return this.#linter.lint(file, deps);
   }
   async fix(file, deps) {
-    return this.#fixer.fix(file, deps);
+    return this.lintAndFix(file, deps);
   }
-  async lintAndFix() {
-    return null;
+  async lintAndFix(file, deps) {
+    const lintRes = await this.#linter.lint(file, deps);
+    if (lintRes.status !== "fail") {
+      return lintRes;
+    }
+    return this.#fixer.fix(file, deps);
   }
   static getHelp() {
     return {
@@ -31497,7 +31501,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "99facff" : "unknown";
+var LINTER_COMMIT = true ? "0ab943f" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
