@@ -31382,7 +31382,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "26df7ac" : "unknown";
+var LINTER_COMMIT = true ? "0f15cd9" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31718,7 +31718,7 @@ var printHelp = () => {
   lines.push("SERVER OPTIONS (used with --server):");
   lines.push("  --port <number>       Port to listen on (default: 3000)");
   lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1)");
-  lines.push("  --api-key <key>       Bearer token required by clients (required)");
+  lines.push("  --api-key <key>       Bearer token required by clients (or set AGENT_API_KEY env var)");
   lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
   lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
   lines.push("");
@@ -31812,9 +31812,9 @@ var initConfig = () => {
     const hostIndex = args.indexOf("--host");
     const host = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "127.0.0.1";
     const keyIndex = args.indexOf("--api-key");
-    const apiKey = keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null;
+    const apiKey = (keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null) ?? process.env.AGENT_API_KEY ?? null;
     if (!apiKey) {
-      console.error("--server requires --api-key <key>");
+      console.error("--server requires --api-key <key> or AGENT_API_KEY env var");
       process.exit(1);
     }
     const providerIndex = args.indexOf("--provider");
