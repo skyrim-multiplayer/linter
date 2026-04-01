@@ -157,7 +157,7 @@ export class AgentCheck extends BaseCheck {
       return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
-    const written = await this.#applyFiles(result.files);
+    const written = await this.#applyFiles(result.files, absFile);
     if (written.error) {
       return { status: "error", output: written.error };
     }
@@ -217,7 +217,7 @@ export class AgentCheck extends BaseCheck {
       return { status: "fail", output: result.reason || "Agent check failed and could not produce a fix" };
     }
 
-    const written = await this.#applyFiles(result.files);
+    const written = await this.#applyFiles(result.files, absFile);
     if (written.error) {
       return { status: "error", output: written.error };
     }
@@ -316,8 +316,9 @@ export class AgentCheck extends BaseCheck {
    * Apply file changes from agent response, filtered by allowedWritePaths.
    * @returns {{ paths: string[], error?: string }}
    */
-  async #applyFiles(files) {
+  async #applyFiles(files, absCurrentFile) {
     const written = [];
+    const resolvedPatterns = this.#resolveWritePatterns(absCurrentFile);
 
     for (const [relPath, content] of Object.entries(files)) {
       // Normalize and validate
@@ -326,7 +327,7 @@ export class AgentCheck extends BaseCheck {
         continue; // skip paths outside repo
       }
 
-      if (!this.#isAllowedPath(normalized)) {
+      if (!this.#isAllowedPath(normalized, resolvedPatterns)) {
         continue; // skip paths not matching allowedWritePaths
       }
 
@@ -342,13 +343,26 @@ export class AgentCheck extends BaseCheck {
   }
 
   /**
-   * Check if a relative path matches any of the allowedWritePaths globs.
+   * Expand template placeholders in allowedWritePatterns for the current file.
+   * Normalizes result to forward slashes and strips any leading "./".
+   */
+  #resolveWritePatterns(absCurrentFile) {
+    if (!absCurrentFile) return this.#allowedWritePatterns;
+    return this.#allowedWritePatterns.map((pattern) =>
+      this.resolveTemplate(pattern, { file: absCurrentFile, repoRoot: this.repoRoot })
+        .replace(/\\/g, "/")
+        .replace(/^\.\//, "")
+    );
+  }
+
+  /**
+   * Check if a relative path matches any of the resolved allowedWritePaths globs.
    * Supports simple glob patterns: * (any within segment), ** (any segments).
    */
-  #isAllowedPath(relPath) {
-    if (this.#allowedWritePatterns.length === 0) return true;
+  #isAllowedPath(relPath, resolvedPatterns) {
+    if (resolvedPatterns.length === 0) return true;
 
-    for (const pattern of this.#allowedWritePatterns) {
+    for (const pattern of resolvedPatterns) {
       if (this.#matchGlob(pattern, relPath)) return true;
     }
     return false;

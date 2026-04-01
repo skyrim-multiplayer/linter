@@ -26270,7 +26270,7 @@ var AgentCheck = class extends BaseCheck {
       if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
       return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
-    const written = await this.#applyFiles(result.files);
+    const written = await this.#applyFiles(result.files, absFile);
     if (written.error) {
       return { status: "error", output: written.error };
     }
@@ -26318,7 +26318,7 @@ Fix instruction: ${this.#fixPrompt}`,
     if (!result.files || Object.keys(result.files).length === 0) {
       return { status: "fail", output: result.reason || "Agent check failed and could not produce a fix" };
     }
-    const written = await this.#applyFiles(result.files);
+    const written = await this.#applyFiles(result.files, absFile);
     if (written.error) {
       return { status: "error", output: written.error };
     }
@@ -26394,14 +26394,15 @@ Fix instruction: ${this.#fixPrompt}`,
    * Apply file changes from agent response, filtered by allowedWritePaths.
    * @returns {{ paths: string[], error?: string }}
    */
-  async #applyFiles(files) {
+  async #applyFiles(files, absCurrentFile) {
     const written = [];
+    const resolvedPatterns = this.#resolveWritePatterns(absCurrentFile);
     for (const [relPath2, content] of Object.entries(files)) {
       const normalized = path11.normalize(relPath2);
       if (normalized.startsWith("..") || path11.isAbsolute(normalized)) {
         continue;
       }
-      if (!this.#isAllowedPath(normalized)) {
+      if (!this.#isAllowedPath(normalized, resolvedPatterns)) {
         continue;
       }
       const absPath = path11.resolve(this.repoRoot, normalized);
@@ -26412,12 +26413,22 @@ Fix instruction: ${this.#fixPrompt}`,
     return { paths: written };
   }
   /**
-   * Check if a relative path matches any of the allowedWritePaths globs.
+   * Expand template placeholders in allowedWritePatterns for the current file.
+   * Normalizes result to forward slashes and strips any leading "./".
+   */
+  #resolveWritePatterns(absCurrentFile) {
+    if (!absCurrentFile) return this.#allowedWritePatterns;
+    return this.#allowedWritePatterns.map(
+      (pattern) => this.resolveTemplate(pattern, { file: absCurrentFile, repoRoot: this.repoRoot }).replace(/\\/g, "/").replace(/^\.\//, "")
+    );
+  }
+  /**
+   * Check if a relative path matches any of the resolved allowedWritePaths globs.
    * Supports simple glob patterns: * (any within segment), ** (any segments).
    */
-  #isAllowedPath(relPath2) {
-    if (this.#allowedWritePatterns.length === 0) return true;
-    for (const pattern of this.#allowedWritePatterns) {
+  #isAllowedPath(relPath2, resolvedPatterns) {
+    if (resolvedPatterns.length === 0) return true;
+    for (const pattern of resolvedPatterns) {
       if (this.#matchGlob(pattern, relPath2)) return true;
     }
     return false;
@@ -31382,7 +31393,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "1897c95" : "unknown";
+var LINTER_COMMIT = true ? "adaf09d" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
