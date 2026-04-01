@@ -31382,7 +31382,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "0f15cd9" : "unknown";
+var LINTER_COMMIT = true ? "1897c95" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31716,11 +31716,11 @@ var printHelp = () => {
   lines.push("  --server              Start HTTP agent server (compatible with AgentCheck)");
   lines.push("");
   lines.push("SERVER OPTIONS (used with --server):");
-  lines.push("  --port <number>       Port to listen on (default: 3000)");
-  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1)");
-  lines.push("  --api-key <key>       Bearer token required by clients (or set AGENT_API_KEY env var)");
-  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
-  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
+  lines.push("  --port <number>       Port to listen on (default: 3000, or AGENT_PORT)");
+  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1, or AGENT_HOST)");
+  lines.push("  --api-key <key>       Bearer token required by clients (or AGENT_API_KEY)");
+  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (or AGENT_PROVIDER)");
+  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini, or AGENT_MODEL)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
@@ -31808,9 +31808,12 @@ var initConfig = () => {
   }
   if (args.includes("--server")) {
     const portIndex = args.indexOf("--port");
-    const port = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 3e3;
+    const port = parseInt(
+      (portIndex !== -1 && args[portIndex + 1] ? args[portIndex + 1] : null) ?? process.env.AGENT_PORT ?? "3000",
+      10
+    );
     const hostIndex = args.indexOf("--host");
-    const host = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "127.0.0.1";
+    const host = (hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : null) ?? process.env.AGENT_HOST ?? "127.0.0.1";
     const keyIndex = args.indexOf("--api-key");
     const apiKey = (keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null) ?? process.env.AGENT_API_KEY ?? null;
     if (!apiKey) {
@@ -31818,9 +31821,9 @@ var initConfig = () => {
       process.exit(1);
     }
     const providerIndex = args.indexOf("--provider");
-    const provider = providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : "claude";
+    const provider = (providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : null) ?? process.env.AGENT_PROVIDER ?? "claude";
     const modelIndex = args.indexOf("--model");
-    const model = modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null;
+    const model = (modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null) ?? process.env.AGENT_MODEL ?? null;
     const { createAgentServer: createAgentServer2 } = await Promise.resolve().then(() => (init_agent_server(), agent_server_exports));
     const app = createAgentServer2({ apiKey, provider, model });
     app.listen(port, host, () => {
