@@ -26164,6 +26164,7 @@ var FirecrawlCheck = class extends BaseCheck {
 // checks/agent-check.js
 import { promises as fs14 } from "fs";
 import path11 from "path";
+import { spawn as spawn3 } from "child_process";
 var DEFAULT_POLL_INTERVAL = 3e3;
 var DEFAULT_TIMEOUT = 3e5;
 var AgentCheck = class extends BaseCheck {
@@ -26173,6 +26174,8 @@ var AgentCheck = class extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #allowedWritePatterns;
+  #compileCommand;
+  #maxRetries;
   #timeout;
   #pollInterval;
   #lock;
@@ -26194,6 +26197,8 @@ var AgentCheck = class extends BaseCheck {
     }
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#allowedWritePatterns = coerceArray(options.allowedWritePaths);
+    this.#compileCommand = options.compileCommand ?? null;
+    this.#maxRetries = options.maxRetries ?? 3;
     this.#timeout = options.timeout ?? DEFAULT_TIMEOUT;
     this.#pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
     this.#lock = !!options.lock;
@@ -26250,6 +26255,49 @@ var AgentCheck = class extends BaseCheck {
     const lockPath = lockfilePath(this.repoRoot);
     if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
+    }
+    if (this.#compileCommand) {
+      for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+        const compile = await this.#runCompile(absFile);
+        if (!compile.failed) {
+          if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+          const status = attempt === 0 ? "pass" : "fixed";
+          return { status, ...this.#lock && { extraFiles: [lockPath] } };
+        }
+        if (attempt === this.#maxRetries) {
+          return { status: "error", output: `Compilation still failing after ${this.#maxRetries} attempt(s):
+${compile.output}` };
+        }
+        const filesMap2 = await this.#buildFilesMap(file);
+        if (filesMap2.error) return { status: "error", output: filesMap2.error };
+        const compileNote = attempt === 0 ? `
+
+Compiler output:
+${compile.output}` : `
+
+Previous fix did not compile. Compiler output:
+${compile.output}`;
+        let result2;
+        try {
+          result2 = await this.#runAgent({
+            prompt: instruction + compileNote,
+            mode: "fix",
+            primaryFile: relFile,
+            files: filesMap2.value
+          });
+        } catch (err) {
+          return { status: "error", output: `Agent error: ${err.message}` };
+        }
+        if (result2.pass || !result2.files || Object.keys(result2.files).length === 0) {
+          return { status: "fail", output: `AI reported no fix needed but compilation failed:
+${compile.output}` };
+        }
+        const written2 = await this.#applyFiles(result2.files, absFile);
+        if (written2.error) return { status: "error", output: written2.error };
+        if (written2.paths.length === 0) {
+          return { status: "fail", output: result2.reason || "Agent returned files but none matched allowedWritePaths" };
+        }
+      }
     }
     const filesMap = await this.#buildFilesMap(file);
     if (filesMap.error) {
@@ -26325,6 +26373,42 @@ Fix instruction: ${this.#fixPrompt}`,
     if (written.paths.length === 0) {
       return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
     }
+    if (this.#compileCommand) {
+      for (let attempt = 0; attempt < this.#maxRetries; attempt++) {
+        const compile = await this.#runCompile(absFile);
+        if (!compile.failed) break;
+        if (attempt === this.#maxRetries - 1) {
+          return { status: "error", output: `Compilation still failing after ${this.#maxRetries} attempt(s):
+${compile.output}` };
+        }
+        const retryFilesMap = await this.#buildFilesMap(file);
+        if (retryFilesMap.error) return { status: "error", output: retryFilesMap.error };
+        let retryResult;
+        try {
+          retryResult = await this.#runAgent({
+            prompt: `Lint criteria: ${this.#lintPrompt}
+Fix instruction: ${this.#fixPrompt}
+
+Previous fix did not compile. Compiler output:
+${compile.output}`,
+            mode: "fix",
+            primaryFile: relFile,
+            files: retryFilesMap.value
+          });
+        } catch (err) {
+          return { status: "error", output: `Agent error: ${err.message}` };
+        }
+        if (retryResult.pass || !retryResult.files || Object.keys(retryResult.files).length === 0) {
+          return { status: "fail", output: `AI reported no fix needed but compilation failed:
+${compile.output}` };
+        }
+        const retryWritten = await this.#applyFiles(retryResult.files, absFile);
+        if (retryWritten.error) return { status: "error", output: retryWritten.error };
+        if (retryWritten.paths.length === 0) {
+          return { status: "fail", output: retryResult.reason || "Agent returned files but none matched allowedWritePaths" };
+        }
+      }
+    }
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
     const extras = written.paths.filter((p) => p !== absFile);
     if (this.#lock) extras.push(lockPath);
@@ -26375,6 +26459,26 @@ Fix instruction: ${this.#fixPrompt}`,
       }
     }
     throw new Error(`Agent task ${taskId} timed out after ${this.#timeout}ms`);
+  }
+  // ── Compile verification ────────────────────────────────────────────
+  #runCompile(absCurrentFile) {
+    const cmd = this.resolveTemplate(this.#compileCommand, { file: absCurrentFile, repoRoot: this.repoRoot });
+    return new Promise((resolve) => {
+      const proc = spawn3(cmd, [], {
+        cwd: this.repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true
+      });
+      let output = "";
+      proc.stdout.on("data", (d) => {
+        output += d;
+      });
+      proc.stderr.on("data", (d) => {
+        output += d;
+      });
+      proc.on("close", (code) => resolve({ failed: code !== 0, output: output.trim() }));
+      proc.on("error", (err) => resolve({ failed: true, output: err.message }));
+    });
   }
   #resolveApiKey() {
     let key = this.#agentApiKey;
@@ -26466,7 +26570,7 @@ Fix instruction: ${this.#fixPrompt}`,
     return {
       name: "AgentCheck",
       description: "Sends files to a remote agent server for analysis/fixing in a sandboxed environment. Uses async HTTP task API (POST /tasks, GET /tasks/{id}) with polling.",
-      options: "agentUrl \u2014 base URL of agent server (required); agentApiKey \u2014 API key, prefix with $ to read from env var (required); lintPrompt \u2014 instruction for lint mode; fixPrompt \u2014 instruction for fix mode; filesToRead \u2014 additional context files (supports templates); allowedWritePaths \u2014 glob patterns for paths agent may write to; timeout \u2014 overall timeout in ms (default: 300000); pollInterval \u2014 polling interval in ms (default: 3000); lock \u2014 cache results in .ai-prompt-lock.json (boolean)"
+      options: "agentUrl \u2014 base URL of agent server (required); agentApiKey \u2014 API key, prefix with $ to read from env var (required); lintPrompt \u2014 instruction for lint mode; fixPrompt \u2014 instruction for fix mode; filesToRead \u2014 additional context files (supports templates); allowedWritePaths \u2014 glob patterns for paths agent may write to; compileCommand \u2014 shell command to verify fix compiles, supports templates (e.g. 'tsc --noEmit' or 'g++ -c {dir}/{name_with_ext} -o /dev/null -I include/'); maxRetries \u2014 max AI retry attempts when compile fails (default: 3); timeout \u2014 overall timeout in ms (default: 300000); pollInterval \u2014 polling interval in ms (default: 3000); lock \u2014 cache results in .ai-prompt-lock.json (boolean)"
     };
   }
 };
@@ -26638,7 +26742,7 @@ var import_file_exists = __toESM(require_dist(), 1);
 var import_debug = __toESM(require_src3(), 1);
 var import_promise_deferred = __toESM(require_dist2(), 1);
 var import_promise_deferred2 = __toESM(require_dist2(), 1);
-import { spawn as spawn3 } from "child_process";
+import { spawn as spawn4 } from "child_process";
 import { EventEmitter } from "node:events";
 var __defProp2 = Object.defineProperty;
 var __defProps = Object.defineProperties;
@@ -28048,7 +28152,7 @@ var init_git_executor_chain = __esm2({
                 rejection = reason || rejection;
               }
             }));
-            const spawned = spawn3(command, args, spawnOptions);
+            const spawned = spawn4(command, args, spawnOptions);
             spawned.stdout.on(
               "data",
               onDataReceived(stdOut, "stdOut", logger, outputLogger.step("stdOut"))
@@ -31393,7 +31497,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "adaf09d" : "unknown";
+var LINTER_COMMIT = true ? "99facff" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {

@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { spawn } from "child_process";
 import { BaseCheck } from "./base-check.js";
 import {
   coerce, coerceArray, standardTemplates, resolvePaths, dedupePaths,
@@ -20,6 +21,8 @@ const DEFAULT_TIMEOUT = 300_000;
  *   fixPrompt       — instruction for fix mode
  *   filesToRead     — additional context files (array of paths, supports templates)
  *   allowedWritePaths — glob patterns for paths the agent may write to (required for fix)
+ *   compileCommand  — shell command to verify fix, supports templates (e.g. "tsc --noEmit", "g++ -c {dir}/{name_with_ext} -o /dev/null -I include/")
+ *   maxRetries      — max AI retry attempts when compile fails (default: 3)
  *   timeout         — overall timeout in ms (default: 300000)
  *   pollInterval    — polling interval in ms (default: 3000)
  *   lock            — cache results per file in .ai-prompt-lock.json (default: false)
@@ -36,6 +39,8 @@ export class AgentCheck extends BaseCheck {
   #fixPrompt;
   #filesToRead;
   #allowedWritePatterns;
+  #compileCommand;
+  #maxRetries;
   #timeout;
   #pollInterval;
   #lock;
@@ -63,6 +68,8 @@ export class AgentCheck extends BaseCheck {
 
     this.#filesToRead = coerceArray(options.filesToRead ?? options.contextFiles);
     this.#allowedWritePatterns = coerceArray(options.allowedWritePaths);
+    this.#compileCommand = options.compileCommand ?? null;
+    this.#maxRetries = options.maxRetries ?? 3;
     this.#timeout = options.timeout ?? DEFAULT_TIMEOUT;
     this.#pollInterval = options.pollInterval ?? DEFAULT_POLL_INTERVAL;
     this.#lock = !!options.lock;
@@ -133,6 +140,51 @@ export class AgentCheck extends BaseCheck {
 
     if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
       return { status: "pass" };
+    }
+
+    if (this.#compileCommand) {
+      for (let attempt = 0; attempt <= this.#maxRetries; attempt++) {
+        const compile = await this.#runCompile(absFile);
+
+        if (!compile.failed) {
+          if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
+          const status = attempt === 0 ? "pass" : "fixed";
+          return { status, ...(this.#lock && { extraFiles: [lockPath] }) };
+        }
+
+        if (attempt === this.#maxRetries) {
+          return { status: "error", output: `Compilation still failing after ${this.#maxRetries} attempt(s):\n${compile.output}` };
+        }
+
+        const filesMap = await this.#buildFilesMap(file);
+        if (filesMap.error) return { status: "error", output: filesMap.error };
+
+        const compileNote = attempt === 0
+          ? `\n\nCompiler output:\n${compile.output}`
+          : `\n\nPrevious fix did not compile. Compiler output:\n${compile.output}`;
+
+        let result;
+        try {
+          result = await this.#runAgent({
+            prompt: instruction + compileNote,
+            mode: "fix",
+            primaryFile: relFile,
+            files: filesMap.value,
+          });
+        } catch (err) {
+          return { status: "error", output: `Agent error: ${err.message}` };
+        }
+
+        if (result.pass || !result.files || Object.keys(result.files).length === 0) {
+          return { status: "fail", output: `AI reported no fix needed but compilation failed:\n${compile.output}` };
+        }
+
+        const written = await this.#applyFiles(result.files, absFile);
+        if (written.error) return { status: "error", output: written.error };
+        if (written.paths.length === 0) {
+          return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
+        }
+      }
     }
 
     const filesMap = await this.#buildFilesMap(file);
@@ -226,6 +278,42 @@ export class AgentCheck extends BaseCheck {
       return { status: "fail", output: result.reason || "Agent returned files but none matched allowedWritePaths" };
     }
 
+    if (this.#compileCommand) {
+      for (let attempt = 0; attempt < this.#maxRetries; attempt++) {
+        const compile = await this.#runCompile(absFile);
+        if (!compile.failed) break;
+
+        if (attempt === this.#maxRetries - 1) {
+          return { status: "error", output: `Compilation still failing after ${this.#maxRetries} attempt(s):\n${compile.output}` };
+        }
+
+        const retryFilesMap = await this.#buildFilesMap(file);
+        if (retryFilesMap.error) return { status: "error", output: retryFilesMap.error };
+
+        let retryResult;
+        try {
+          retryResult = await this.#runAgent({
+            prompt: `Lint criteria: ${this.#lintPrompt}\nFix instruction: ${this.#fixPrompt}\n\nPrevious fix did not compile. Compiler output:\n${compile.output}`,
+            mode: "fix",
+            primaryFile: relFile,
+            files: retryFilesMap.value,
+          });
+        } catch (err) {
+          return { status: "error", output: `Agent error: ${err.message}` };
+        }
+
+        if (retryResult.pass || !retryResult.files || Object.keys(retryResult.files).length === 0) {
+          return { status: "fail", output: `AI reported no fix needed but compilation failed:\n${compile.output}` };
+        }
+
+        const retryWritten = await this.#applyFiles(retryResult.files, absFile);
+        if (retryWritten.error) return { status: "error", output: retryWritten.error };
+        if (retryWritten.paths.length === 0) {
+          return { status: "fail", output: retryResult.reason || "Agent returned files but none matched allowedWritePaths" };
+        }
+      }
+    }
+
     if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot);
 
     const extras = written.paths.filter((p) => p !== absFile);
@@ -293,6 +381,26 @@ export class AgentCheck extends BaseCheck {
     }
 
     throw new Error(`Agent task ${taskId} timed out after ${this.#timeout}ms`);
+  }
+
+  // ── Compile verification ────────────────────────────────────────────
+
+  #runCompile(absCurrentFile) {
+    const cmd = this.resolveTemplate(this.#compileCommand, { file: absCurrentFile, repoRoot: this.repoRoot });
+    return new Promise((resolve) => {
+      const proc = spawn(cmd, [], {
+        cwd: this.repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+        shell: true,
+      });
+
+      let output = "";
+      proc.stdout.on("data", (d) => { output += d; });
+      proc.stderr.on("data", (d) => { output += d; });
+
+      proc.on("close", (code) => resolve({ failed: code !== 0, output: output.trim() }));
+      proc.on("error", (err) => resolve({ failed: true, output: err.message }));
+    });
   }
 
   #resolveApiKey() {
@@ -412,6 +520,8 @@ export class AgentCheck extends BaseCheck {
         "fixPrompt — instruction for fix mode; " +
         "filesToRead — additional context files (supports templates); " +
         "allowedWritePaths — glob patterns for paths agent may write to; " +
+        "compileCommand — shell command to verify fix compiles, supports templates (e.g. 'tsc --noEmit' or 'g++ -c {dir}/{name_with_ext} -o /dev/null -I include/'); " +
+        "maxRetries — max AI retry attempts when compile fails (default: 3); " +
         "timeout — overall timeout in ms (default: 300000); " +
         "pollInterval — polling interval in ms (default: 3000); " +
         "lock — cache results in .ai-prompt-lock.json (boolean)",
