@@ -1,9 +1,19 @@
 import express from "express";
 import { randomUUID } from "crypto";
 import os from "os";
+import morgan from "morgan";
+import tsscmp from "tsscmp";
 import { ClaudeProvider } from "./ai-providers/claude.js";
 import { GeminiProvider } from "./ai-providers/gemini.js";
 import { EchoProvider } from "./ai-providers/echo.js";
+
+const TASK_TIMEOUT_MS = 120_000; // 2 minutes per AI call
+
+// Input validation limits
+const MAX_PROMPT_LENGTH = 100_000;
+const MAX_FILE_PATH_LENGTH = 500;
+const MAX_FILE_CONTENT_LENGTH = 500_000;
+const MAX_FILES_COUNT = 50;
 
 const AI_PROVIDERS = {
   claude: ClaudeProvider,
@@ -29,6 +39,7 @@ export function createAgentServer({ apiKey, provider = "claude", model = null })
 
   const app = express();
   app.use(express.json({ limit: "10mb" }));
+  app.use(morgan("combined"));
 
   // In-memory task store: taskId → { status, progress?, result?, error? }
   const tasks = new Map();
@@ -36,7 +47,7 @@ export function createAgentServer({ apiKey, provider = "claude", model = null })
   const authenticate = (req, res, next) => {
     const auth = req.headers["authorization"] || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-    if (!token || token !== apiKey) {
+    if (!token || !tsscmp(token, apiKey)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     next();
@@ -45,11 +56,48 @@ export function createAgentServer({ apiKey, provider = "claude", model = null })
   // POST /tasks
   app.post("/tasks", authenticate, (req, res) => {
     const { prompt, mode, primaryFile, files } = req.body ?? {};
+
+    // Type and presence checks
     if (!prompt || !mode || !primaryFile || !files) {
       return res.status(400).json({ error: "Missing required fields: prompt, mode, primaryFile, files" });
     }
+    if (typeof prompt !== "string") {
+      return res.status(400).json({ error: "prompt must be a string" });
+    }
+    if (typeof mode !== "string") {
+      return res.status(400).json({ error: "mode must be a string" });
+    }
+    if (typeof primaryFile !== "string") {
+      return res.status(400).json({ error: "primaryFile must be a string" });
+    }
+    if (typeof files !== "object" || Array.isArray(files)) {
+      return res.status(400).json({ error: "files must be a plain object" });
+    }
+
+    // Value constraints
     if (mode !== "lint" && mode !== "fix") {
-      return res.status(400).json({ error: `Invalid mode "${mode}". Expected "lint" or "fix"` });
+      return res.status(400).json({ error: 'Invalid mode. Expected "lint" or "fix"' });
+    }
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: `prompt exceeds ${MAX_PROMPT_LENGTH} character limit` });
+    }
+    if (primaryFile.length > MAX_FILE_PATH_LENGTH) {
+      return res.status(400).json({ error: `primaryFile path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+    }
+    const fileEntries = Object.entries(files);
+    if (fileEntries.length > MAX_FILES_COUNT) {
+      return res.status(400).json({ error: `files object exceeds ${MAX_FILES_COUNT} entry limit` });
+    }
+    for (const [relPath, content] of fileEntries) {
+      if (typeof relPath !== "string" || relPath.length > MAX_FILE_PATH_LENGTH) {
+        return res.status(400).json({ error: `file path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+      }
+      if (typeof content !== "string") {
+        return res.status(400).json({ error: `file content for "${relPath}" must be a string` });
+      }
+      if (content.length > MAX_FILE_CONTENT_LENGTH) {
+        return res.status(400).json({ error: `file content for "${relPath}" exceeds ${MAX_FILE_CONTENT_LENGTH} character limit` });
+      }
     }
 
     const taskId = randomUUID();
@@ -117,7 +165,7 @@ async function processTask(task, { prompt, mode, primaryFile, files }, aiProvide
         `If a fix is applied, set pass to false and include only the changed files in "files".`;
     }
 
-    const reply = await aiProvider.call(fullPrompt, { cwd: os.tmpdir() });
+    const reply = await aiProvider.call(fullPrompt, { cwd: os.tmpdir(), timeout: TASK_TIMEOUT_MS });
 
     let result;
     try {

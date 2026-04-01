@@ -459,6 +459,7 @@ const printHelp = () => {
   lines.push("");
   lines.push("SERVER OPTIONS (used with --server):");
   lines.push("  --port <number>       Port to listen on (default: 3000)");
+  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
   lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
   lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
@@ -552,6 +553,7 @@ const initConfig = () => {
  *   --fix            Run checks in fix mode (modify files in-place)
  *   --server         Start HTTP agent server (compatible with AgentCheck)
  *   --port <number>  Server port (default: 3000)
+ *   --host <address> Network interface to bind (default: 127.0.0.1)
  *   --api-key <key>  Bearer token for server auth (required with --server)
  *   --provider <n>   AI provider for server: claude (default) or gemini
  *   --no-download    Do not download tools if missing
@@ -595,6 +597,9 @@ const initConfig = () => {
     const portIndex = args.indexOf("--port");
     const port = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 3000;
 
+    const hostIndex = args.indexOf("--host");
+    const host = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "127.0.0.1";
+
     const keyIndex = args.indexOf("--api-key");
     const apiKey = keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null;
     if (!apiKey) {
@@ -610,9 +615,9 @@ const initConfig = () => {
 
     const { createAgentServer } = await import("./agent-server.js");
     const app = createAgentServer({ apiKey, provider, model });
-    app.listen(port, () => {
+    app.listen(port, host, () => {
       const modelStr = model ? ` model: ${model}` : "";
-      console.log(`Agent server listening on port ${port} (provider: ${provider}${modelStr})`);
+      console.log(`Agent server listening on ${host}:${port} (provider: ${provider}${modelStr})`);
     });
     return; // keep process alive
   }

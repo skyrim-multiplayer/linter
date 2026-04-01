@@ -108,6 +108,17 @@ var init_claude = __esm({
           });
           let stdout = "";
           let stderr = "";
+          let settled = false;
+          const settle = (fn) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            fn();
+          };
+          const timer = options.timeout ? setTimeout(() => {
+            proc.kill();
+            settle(() => reject(new Error(`claude CLI timed out after ${options.timeout}ms`)));
+          }, options.timeout) : null;
           proc.stdout.on("data", (data) => {
             stdout += data;
           });
@@ -115,21 +126,25 @@ var init_claude = __esm({
             stderr += data;
           });
           proc.on("error", (err) => {
-            if (err.code === "ENOENT") {
-              reject(new Error("claude CLI not found on PATH"));
-            } else {
-              reject(err);
-            }
+            settle(() => {
+              if (err.code === "ENOENT") {
+                reject(new Error("claude CLI not found on PATH"));
+              } else {
+                reject(err);
+              }
+            });
           });
           proc.on("close", (code) => {
-            if (code !== 0) {
-              const parts = [`claude exited with code ${code}`];
-              if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
-              if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
-              reject(new Error(parts.join("\n")));
-              return;
-            }
-            resolve(stdout.trim());
+            settle(() => {
+              if (code !== 0) {
+                const parts = [`claude exited with code ${code}`];
+                if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+                if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+                reject(new Error(parts.join("\n")));
+                return;
+              }
+              resolve(stdout.trim());
+            });
           });
           proc.stdin.write(prompt);
           proc.stdin.end();
@@ -180,6 +195,17 @@ var init_gemini = __esm({
           });
           let stdout = "";
           let stderr = "";
+          let settled = false;
+          const settle = (fn) => {
+            if (settled) return;
+            settled = true;
+            if (timer) clearTimeout(timer);
+            fn();
+          };
+          const timer = options.timeout ? setTimeout(() => {
+            proc.kill();
+            settle(() => reject(new Error(`gemini CLI timed out after ${options.timeout}ms`)));
+          }, options.timeout) : null;
           proc.stdout.on("data", (data) => {
             stdout += data;
           });
@@ -187,21 +213,25 @@ var init_gemini = __esm({
             stderr += data;
           });
           proc.on("error", (err) => {
-            if (err.code === "ENOENT") {
-              reject(new Error("gemini CLI not found on PATH"));
-            } else {
-              reject(err);
-            }
+            settle(() => {
+              if (err.code === "ENOENT") {
+                reject(new Error("gemini CLI not found on PATH"));
+              } else {
+                reject(err);
+              }
+            });
           });
           proc.on("close", (code) => {
-            if (code !== 0) {
-              const parts = [`gemini exited with code ${code}`];
-              if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
-              if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
-              reject(new Error(parts.join("\n")));
-              return;
-            }
-            resolve(stdout.trim());
+            settle(() => {
+              if (code !== 0) {
+                const parts = [`gemini exited with code ${code}`];
+                if (stderr.trim()) parts.push(`stderr: ${stderr.trim()}`);
+                if (stdout.trim()) parts.push(`stdout: ${stdout.trim()}`);
+                reject(new Error(parts.join("\n")));
+                return;
+              }
+              resolve(stdout.trim());
+            });
           });
           proc.stdin.write(prompt);
           proc.stdin.end();
@@ -23932,6 +23962,550 @@ var require_express2 = __commonJS({
   }
 });
 
+// node_modules/basic-auth/node_modules/safe-buffer/index.js
+var require_safe_buffer2 = __commonJS({
+  "node_modules/basic-auth/node_modules/safe-buffer/index.js"(exports, module) {
+    var buffer = __require("buffer");
+    var Buffer2 = buffer.Buffer;
+    function copyProps(src, dst) {
+      for (var key in src) {
+        dst[key] = src[key];
+      }
+    }
+    if (Buffer2.from && Buffer2.alloc && Buffer2.allocUnsafe && Buffer2.allocUnsafeSlow) {
+      module.exports = buffer;
+    } else {
+      copyProps(buffer, exports);
+      exports.Buffer = SafeBuffer;
+    }
+    function SafeBuffer(arg, encodingOrOffset, length) {
+      return Buffer2(arg, encodingOrOffset, length);
+    }
+    copyProps(Buffer2, SafeBuffer);
+    SafeBuffer.from = function(arg, encodingOrOffset, length) {
+      if (typeof arg === "number") {
+        throw new TypeError("Argument must not be a number");
+      }
+      return Buffer2(arg, encodingOrOffset, length);
+    };
+    SafeBuffer.alloc = function(size, fill, encoding) {
+      if (typeof size !== "number") {
+        throw new TypeError("Argument must be a number");
+      }
+      var buf = Buffer2(size);
+      if (fill !== void 0) {
+        if (typeof encoding === "string") {
+          buf.fill(fill, encoding);
+        } else {
+          buf.fill(fill);
+        }
+      } else {
+        buf.fill(0);
+      }
+      return buf;
+    };
+    SafeBuffer.allocUnsafe = function(size) {
+      if (typeof size !== "number") {
+        throw new TypeError("Argument must be a number");
+      }
+      return Buffer2(size);
+    };
+    SafeBuffer.allocUnsafeSlow = function(size) {
+      if (typeof size !== "number") {
+        throw new TypeError("Argument must be a number");
+      }
+      return buffer.SlowBuffer(size);
+    };
+  }
+});
+
+// node_modules/basic-auth/index.js
+var require_basic_auth = __commonJS({
+  "node_modules/basic-auth/index.js"(exports, module) {
+    "use strict";
+    var Buffer2 = require_safe_buffer2().Buffer;
+    module.exports = auth;
+    module.exports.parse = parse;
+    var CREDENTIALS_REGEXP = /^ *(?:[Bb][Aa][Ss][Ii][Cc]) +([A-Za-z0-9._~+/-]+=*) *$/;
+    var USER_PASS_REGEXP = /^([^:]*):(.*)$/;
+    function auth(req) {
+      if (!req) {
+        throw new TypeError("argument req is required");
+      }
+      if (typeof req !== "object") {
+        throw new TypeError("argument req is required to be an object");
+      }
+      var header = getAuthorization(req);
+      return parse(header);
+    }
+    function decodeBase64(str) {
+      return Buffer2.from(str, "base64").toString();
+    }
+    function getAuthorization(req) {
+      if (!req.headers || typeof req.headers !== "object") {
+        throw new TypeError("argument req is required to have headers property");
+      }
+      return req.headers.authorization;
+    }
+    function parse(string) {
+      if (typeof string !== "string") {
+        return void 0;
+      }
+      var match = CREDENTIALS_REGEXP.exec(string);
+      if (!match) {
+        return void 0;
+      }
+      var userPass = USER_PASS_REGEXP.exec(decodeBase64(match[1]));
+      if (!userPass) {
+        return void 0;
+      }
+      return new Credentials(userPass[1], userPass[2]);
+    }
+    function Credentials(name, pass) {
+      this.name = name;
+      this.pass = pass;
+    }
+  }
+});
+
+// node_modules/morgan/node_modules/on-finished/index.js
+var require_on_finished2 = __commonJS({
+  "node_modules/morgan/node_modules/on-finished/index.js"(exports, module) {
+    "use strict";
+    module.exports = onFinished;
+    module.exports.isFinished = isFinished;
+    var first2 = require_ee_first();
+    var defer = typeof setImmediate === "function" ? setImmediate : function(fn) {
+      process.nextTick(fn.bind.apply(fn, arguments));
+    };
+    function onFinished(msg, listener) {
+      if (isFinished(msg) !== false) {
+        defer(listener, null, msg);
+        return msg;
+      }
+      attachListener(msg, listener);
+      return msg;
+    }
+    function isFinished(msg) {
+      var socket = msg.socket;
+      if (typeof msg.finished === "boolean") {
+        return Boolean(msg.finished || socket && !socket.writable);
+      }
+      if (typeof msg.complete === "boolean") {
+        return Boolean(msg.upgrade || !socket || !socket.readable || msg.complete && !msg.readable);
+      }
+      return void 0;
+    }
+    function attachFinishedListener(msg, callback) {
+      var eeMsg;
+      var eeSocket;
+      var finished = false;
+      function onFinish(error) {
+        eeMsg.cancel();
+        eeSocket.cancel();
+        finished = true;
+        callback(error);
+      }
+      eeMsg = eeSocket = first2([[msg, "end", "finish"]], onFinish);
+      function onSocket(socket) {
+        msg.removeListener("socket", onSocket);
+        if (finished) return;
+        if (eeMsg !== eeSocket) return;
+        eeSocket = first2([[socket, "error", "close"]], onFinish);
+      }
+      if (msg.socket) {
+        onSocket(msg.socket);
+        return;
+      }
+      msg.on("socket", onSocket);
+      if (msg.socket === void 0) {
+        patchAssignSocket(msg, onSocket);
+      }
+    }
+    function attachListener(msg, listener) {
+      var attached = msg.__onFinished;
+      if (!attached || !attached.queue) {
+        attached = msg.__onFinished = createListener(msg);
+        attachFinishedListener(msg, attached);
+      }
+      attached.queue.push(listener);
+    }
+    function createListener(msg) {
+      function listener(err) {
+        if (msg.__onFinished === listener) msg.__onFinished = null;
+        if (!listener.queue) return;
+        var queue = listener.queue;
+        listener.queue = null;
+        for (var i = 0; i < queue.length; i++) {
+          queue[i](err, msg);
+        }
+      }
+      listener.queue = [];
+      return listener;
+    }
+    function patchAssignSocket(res, callback) {
+      var assignSocket = res.assignSocket;
+      if (typeof assignSocket !== "function") return;
+      res.assignSocket = function _assignSocket(socket) {
+        assignSocket.call(this, socket);
+        callback(socket);
+      };
+    }
+  }
+});
+
+// node_modules/on-headers/index.js
+var require_on_headers = __commonJS({
+  "node_modules/on-headers/index.js"(exports, module) {
+    "use strict";
+    module.exports = onHeaders;
+    var http = __require("http");
+    var isAppendHeaderSupported = typeof http.ServerResponse.prototype.appendHeader === "function";
+    var set1dArray = isAppendHeaderSupported ? set1dArrayWithAppend : set1dArrayWithSet;
+    function createWriteHead(prevWriteHead, listener) {
+      var fired = false;
+      return function writeHead(statusCode) {
+        var args = setWriteHeadHeaders.apply(this, arguments);
+        if (!fired) {
+          fired = true;
+          listener.call(this);
+          if (typeof args[0] === "number" && this.statusCode !== args[0]) {
+            args[0] = this.statusCode;
+            args.length = 1;
+          }
+        }
+        return prevWriteHead.apply(this, args);
+      };
+    }
+    function onHeaders(res, listener) {
+      if (!res) {
+        throw new TypeError("argument res is required");
+      }
+      if (typeof listener !== "function") {
+        throw new TypeError("argument listener must be a function");
+      }
+      res.writeHead = createWriteHead(res.writeHead, listener);
+    }
+    function setHeadersFromArray(res, headers) {
+      if (headers.length && Array.isArray(headers[0])) {
+        set2dArray(res, headers);
+      } else {
+        if (headers.length % 2 !== 0) {
+          throw new TypeError("headers array is malformed");
+        }
+        set1dArray(res, headers);
+      }
+    }
+    function setHeadersFromObject(res, headers) {
+      var keys = Object.keys(headers);
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i];
+        if (k) res.setHeader(k, headers[k]);
+      }
+    }
+    function setWriteHeadHeaders(statusCode) {
+      var length = arguments.length;
+      var headerIndex = length > 1 && typeof arguments[1] === "string" ? 2 : 1;
+      var headers = length >= headerIndex + 1 ? arguments[headerIndex] : void 0;
+      this.statusCode = statusCode;
+      if (Array.isArray(headers)) {
+        setHeadersFromArray(this, headers);
+      } else if (headers) {
+        setHeadersFromObject(this, headers);
+      }
+      var args = new Array(Math.min(length, headerIndex));
+      for (var i = 0; i < args.length; i++) {
+        args[i] = arguments[i];
+      }
+      return args;
+    }
+    function set2dArray(res, headers) {
+      var key;
+      for (var i = 0; i < headers.length; i++) {
+        key = headers[i][0];
+        if (key) {
+          res.setHeader(key, headers[i][1]);
+        }
+      }
+    }
+    function set1dArrayWithAppend(res, headers) {
+      for (var i = 0; i < headers.length; i += 2) {
+        res.removeHeader(headers[i]);
+      }
+      var key;
+      for (var j = 0; j < headers.length; j += 2) {
+        key = headers[j];
+        if (key) {
+          res.appendHeader(key, headers[j + 1]);
+        }
+      }
+    }
+    function set1dArrayWithSet(res, headers) {
+      var key;
+      for (var i = 0; i < headers.length; i += 2) {
+        key = headers[i];
+        if (key) {
+          res.setHeader(key, headers[i + 1]);
+        }
+      }
+    }
+  }
+});
+
+// node_modules/morgan/index.js
+var require_morgan = __commonJS({
+  "node_modules/morgan/index.js"(exports, module) {
+    "use strict";
+    module.exports = morgan2;
+    module.exports.compile = compile;
+    module.exports.format = format;
+    module.exports.token = token;
+    var auth = require_basic_auth();
+    var debug2 = require_src4()("morgan");
+    var deprecate = require_depd()("morgan");
+    var onFinished = require_on_finished2();
+    var onHeaders = require_on_headers();
+    var CLF_MONTH = [
+      "Jan",
+      "Feb",
+      "Mar",
+      "Apr",
+      "May",
+      "Jun",
+      "Jul",
+      "Aug",
+      "Sep",
+      "Oct",
+      "Nov",
+      "Dec"
+    ];
+    var DEFAULT_BUFFER_DURATION = 1e3;
+    function morgan2(format2, options) {
+      var fmt = format2;
+      var opts = options || {};
+      if (format2 && typeof format2 === "object") {
+        opts = format2;
+        fmt = opts.format || "default";
+        deprecate("morgan(options): use morgan(" + (typeof fmt === "string" ? JSON.stringify(fmt) : "format") + ", options) instead");
+      }
+      if (fmt === void 0) {
+        deprecate("undefined format: specify a format");
+      }
+      var immediate = opts.immediate;
+      var skip = opts.skip || false;
+      var formatLine = typeof fmt !== "function" ? getFormatFunction(fmt) : fmt;
+      var buffer = opts.buffer;
+      var stream = opts.stream || process.stdout;
+      if (buffer) {
+        deprecate("buffer option");
+        var interval = typeof buffer !== "number" ? DEFAULT_BUFFER_DURATION : buffer;
+        stream = createBufferStream(stream, interval);
+      }
+      return function logger(req, res, next) {
+        req._startAt = void 0;
+        req._startTime = void 0;
+        req._remoteAddress = getip(req);
+        res._startAt = void 0;
+        res._startTime = void 0;
+        recordStartTime.call(req);
+        function logRequest() {
+          if (skip !== false && skip(req, res)) {
+            debug2("skip request");
+            return;
+          }
+          var line = formatLine(morgan2, req, res);
+          if (line == null) {
+            debug2("skip line");
+            return;
+          }
+          debug2("log request");
+          stream.write(line + "\n");
+        }
+        ;
+        if (immediate) {
+          logRequest();
+        } else {
+          onHeaders(res, recordStartTime);
+          onFinished(res, logRequest);
+        }
+        next();
+      };
+    }
+    morgan2.format("combined", ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"');
+    morgan2.format("common", ':remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length]');
+    morgan2.format("default", ':remote-addr - :remote-user [:date] ":method :url HTTP/:http-version" :status :res[content-length] ":referrer" ":user-agent"');
+    deprecate.property(morgan2, "default", "default format: use combined format");
+    morgan2.format("short", ":remote-addr :remote-user :method :url HTTP/:http-version :status :res[content-length] - :response-time ms");
+    morgan2.format("tiny", ":method :url :status :res[content-length] - :response-time ms");
+    morgan2.format("dev", function developmentFormatLine(tokens, req, res) {
+      var status = headersSent(res) ? res.statusCode : void 0;
+      var color = status >= 500 ? 31 : status >= 400 ? 33 : status >= 300 ? 36 : status >= 200 ? 32 : 0;
+      var fn = developmentFormatLine[color];
+      if (!fn) {
+        fn = developmentFormatLine[color] = compile("\x1B[0m:method :url \x1B[" + color + "m:status\x1B[0m :response-time ms - :res[content-length]\x1B[0m");
+      }
+      return fn(tokens, req, res);
+    });
+    morgan2.token("url", function getUrlToken(req) {
+      return req.originalUrl || req.url;
+    });
+    morgan2.token("method", function getMethodToken(req) {
+      return req.method;
+    });
+    morgan2.token("response-time", function getResponseTimeToken(req, res, digits) {
+      if (!req._startAt || !res._startAt) {
+        return;
+      }
+      var ms = (res._startAt[0] - req._startAt[0]) * 1e3 + (res._startAt[1] - req._startAt[1]) * 1e-6;
+      return ms.toFixed(digits === void 0 ? 3 : digits);
+    });
+    morgan2.token("total-time", function getTotalTimeToken(req, res, digits) {
+      if (!req._startAt || !res._startAt) {
+        return;
+      }
+      var elapsed = process.hrtime(req._startAt);
+      var ms = elapsed[0] * 1e3 + elapsed[1] * 1e-6;
+      return ms.toFixed(digits === void 0 ? 3 : digits);
+    });
+    morgan2.token("date", function getDateToken(req, res, format2) {
+      var date = /* @__PURE__ */ new Date();
+      switch (format2 || "web") {
+        case "clf":
+          return clfdate(date);
+        case "iso":
+          return date.toISOString();
+        case "web":
+          return date.toUTCString();
+      }
+    });
+    morgan2.token("status", function getStatusToken(req, res) {
+      return headersSent(res) ? String(res.statusCode) : void 0;
+    });
+    morgan2.token("referrer", function getReferrerToken(req) {
+      return req.headers.referer || req.headers.referrer;
+    });
+    morgan2.token("remote-addr", getip);
+    morgan2.token("remote-user", function getRemoteUserToken(req) {
+      var credentials = auth(req);
+      return credentials ? credentials.name : void 0;
+    });
+    morgan2.token("http-version", function getHttpVersionToken(req) {
+      return req.httpVersionMajor + "." + req.httpVersionMinor;
+    });
+    morgan2.token("user-agent", function getUserAgentToken(req) {
+      return req.headers["user-agent"];
+    });
+    morgan2.token("req", function getRequestToken(req, res, field) {
+      var header = req.headers[field.toLowerCase()];
+      return Array.isArray(header) ? header.join(", ") : header;
+    });
+    morgan2.token("res", function getResponseHeader(req, res, field) {
+      if (!headersSent(res)) {
+        return void 0;
+      }
+      var header = res.getHeader(field);
+      return Array.isArray(header) ? header.join(", ") : header;
+    });
+    function clfdate(dateTime) {
+      var date = dateTime.getUTCDate();
+      var hour = dateTime.getUTCHours();
+      var mins = dateTime.getUTCMinutes();
+      var secs = dateTime.getUTCSeconds();
+      var year = dateTime.getUTCFullYear();
+      var month = CLF_MONTH[dateTime.getUTCMonth()];
+      return pad2(date) + "/" + month + "/" + year + ":" + pad2(hour) + ":" + pad2(mins) + ":" + pad2(secs) + " +0000";
+    }
+    function compile(format2) {
+      if (typeof format2 !== "string") {
+        throw new TypeError("argument format must be a string");
+      }
+      var fmt = String(JSON.stringify(format2));
+      var js = '  "use strict"\n  return ' + fmt.replace(/:([-\w]{2,})(?:\[([^\]]+)\])?/g, function(_, name, arg) {
+        var tokenArguments = "req, res";
+        var tokenFunction = "tokens[" + String(JSON.stringify(name)) + "]";
+        if (arg !== void 0) {
+          tokenArguments += ", " + String(JSON.stringify(arg));
+        }
+        return '" +\n    (' + tokenFunction + "(" + tokenArguments + ') || "-") + "';
+      });
+      return new Function("tokens, req, res", js);
+    }
+    function createBufferStream(stream, interval) {
+      var buf = [];
+      var timer = null;
+      function flush() {
+        timer = null;
+        stream.write(buf.join(""));
+        buf.length = 0;
+      }
+      function write(str) {
+        if (timer === null) {
+          timer = setTimeout(flush, interval);
+        }
+        buf.push(str);
+      }
+      return { write };
+    }
+    function format(name, fmt) {
+      morgan2[name] = fmt;
+      return this;
+    }
+    function getFormatFunction(name) {
+      var fmt = morgan2[name] || name || morgan2.default;
+      return typeof fmt !== "function" ? compile(fmt) : fmt;
+    }
+    function getip(req) {
+      return req.ip || req._remoteAddress || req.connection && req.connection.remoteAddress || void 0;
+    }
+    function headersSent(res) {
+      return typeof res.headersSent !== "boolean" ? Boolean(res._header) : res.headersSent;
+    }
+    function pad2(num) {
+      var str = String(num);
+      return (str.length === 1 ? "0" : "") + str;
+    }
+    function recordStartTime() {
+      this._startAt = process.hrtime();
+      this._startTime = /* @__PURE__ */ new Date();
+    }
+    function token(name, fn) {
+      morgan2[name] = fn;
+      return this;
+    }
+  }
+});
+
+// node_modules/tsscmp/lib/index.js
+var require_lib3 = __commonJS({
+  "node_modules/tsscmp/lib/index.js"(exports, module) {
+    "use strict";
+    var crypto2 = __require("crypto");
+    function bufferEqual(a, b) {
+      if (a.length !== b.length) {
+        return false;
+      }
+      if (crypto2.timingSafeEqual) {
+        return crypto2.timingSafeEqual(a, b);
+      }
+      for (var i = 0; i < a.length; i++) {
+        if (a[i] !== b[i]) {
+          return false;
+        }
+      }
+      return true;
+    }
+    function timeSafeCompare(a, b) {
+      var sa = String(a);
+      var sb = String(b);
+      var key = crypto2.pseudoRandomBytes(32);
+      var ah = crypto2.createHmac("sha256", key).update(sa).digest();
+      var bh = crypto2.createHmac("sha256", key).update(sb).digest();
+      return bufferEqual(ah, bh) && a === b;
+    }
+    module.exports = timeSafeCompare;
+  }
+});
+
 // ai-providers/echo.js
 var EchoProvider;
 var init_echo = __esm({
@@ -23976,11 +24550,12 @@ function createAgentServer({ apiKey, provider = "claude", model = null }) {
   const aiProvider = provider.toLowerCase() === "gemini" ? new ProviderClass(model) : new ProviderClass();
   const app = (0, import_express.default)();
   app.use(import_express.default.json({ limit: "10mb" }));
+  app.use((0, import_morgan.default)("combined"));
   const tasks = /* @__PURE__ */ new Map();
   const authenticate = (req, res, next) => {
     const auth = req.headers["authorization"] || "";
     const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
-    if (!token || token !== apiKey) {
+    if (!token || !(0, import_tsscmp.default)(token, apiKey)) {
       return res.status(401).json({ error: "Unauthorized" });
     }
     next();
@@ -23990,8 +24565,41 @@ function createAgentServer({ apiKey, provider = "claude", model = null }) {
     if (!prompt || !mode || !primaryFile || !files) {
       return res.status(400).json({ error: "Missing required fields: prompt, mode, primaryFile, files" });
     }
+    if (typeof prompt !== "string") {
+      return res.status(400).json({ error: "prompt must be a string" });
+    }
+    if (typeof mode !== "string") {
+      return res.status(400).json({ error: "mode must be a string" });
+    }
+    if (typeof primaryFile !== "string") {
+      return res.status(400).json({ error: "primaryFile must be a string" });
+    }
+    if (typeof files !== "object" || Array.isArray(files)) {
+      return res.status(400).json({ error: "files must be a plain object" });
+    }
     if (mode !== "lint" && mode !== "fix") {
-      return res.status(400).json({ error: `Invalid mode "${mode}". Expected "lint" or "fix"` });
+      return res.status(400).json({ error: 'Invalid mode. Expected "lint" or "fix"' });
+    }
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: `prompt exceeds ${MAX_PROMPT_LENGTH} character limit` });
+    }
+    if (primaryFile.length > MAX_FILE_PATH_LENGTH) {
+      return res.status(400).json({ error: `primaryFile path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+    }
+    const fileEntries = Object.entries(files);
+    if (fileEntries.length > MAX_FILES_COUNT) {
+      return res.status(400).json({ error: `files object exceeds ${MAX_FILES_COUNT} entry limit` });
+    }
+    for (const [relPath2, content] of fileEntries) {
+      if (typeof relPath2 !== "string" || relPath2.length > MAX_FILE_PATH_LENGTH) {
+        return res.status(400).json({ error: `file path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+      }
+      if (typeof content !== "string") {
+        return res.status(400).json({ error: `file content for "${relPath2}" must be a string` });
+      }
+      if (content.length > MAX_FILE_CONTENT_LENGTH) {
+        return res.status(400).json({ error: `file content for "${relPath2}" exceeds ${MAX_FILE_CONTENT_LENGTH} character limit` });
+      }
     }
     const taskId = randomUUID();
     const task = { id: taskId, status: "pending", progress: void 0, result: void 0, error: void 0 };
@@ -24039,7 +24647,7 @@ ${fileContext}
 
 Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation", "files": { "<relPath>": "<full new file content>" } }. If no fix is needed, set pass to true and omit files. If a fix is applied, set pass to false and include only the changed files in "files".`;
     }
-    const reply = await aiProvider.call(fullPrompt, { cwd: os4.tmpdir() });
+    const reply = await aiProvider.call(fullPrompt, { cwd: os4.tmpdir(), timeout: TASK_TIMEOUT_MS });
     let result;
     try {
       const jsonMatch = reply.match(/\{[\s\S]*\}/);
@@ -24058,13 +24666,20 @@ Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "rea
     task.error = err.message;
   }
 }
-var import_express, AI_PROVIDERS2;
+var import_express, import_morgan, import_tsscmp, TASK_TIMEOUT_MS, MAX_PROMPT_LENGTH, MAX_FILE_PATH_LENGTH, MAX_FILE_CONTENT_LENGTH, MAX_FILES_COUNT, AI_PROVIDERS2;
 var init_agent_server = __esm({
   "agent-server.js"() {
     import_express = __toESM(require_express2(), 1);
+    import_morgan = __toESM(require_morgan(), 1);
+    import_tsscmp = __toESM(require_lib3(), 1);
     init_claude();
     init_gemini();
     init_echo();
+    TASK_TIMEOUT_MS = 12e4;
+    MAX_PROMPT_LENGTH = 1e5;
+    MAX_FILE_PATH_LENGTH = 500;
+    MAX_FILE_CONTENT_LENGTH = 5e5;
+    MAX_FILES_COUNT = 50;
     AI_PROVIDERS2 = {
       claude: ClaudeProvider,
       gemini: GeminiProvider,
@@ -30767,7 +31382,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "30b5d76" : "unknown";
+var LINTER_COMMIT = true ? "26df7ac" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31102,6 +31717,7 @@ var printHelp = () => {
   lines.push("");
   lines.push("SERVER OPTIONS (used with --server):");
   lines.push("  --port <number>       Port to listen on (default: 3000)");
+  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
   lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
   lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini provider)");
@@ -31193,6 +31809,8 @@ var initConfig = () => {
   if (args.includes("--server")) {
     const portIndex = args.indexOf("--port");
     const port = portIndex !== -1 && args[portIndex + 1] ? parseInt(args[portIndex + 1], 10) : 3e3;
+    const hostIndex = args.indexOf("--host");
+    const host = hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : "127.0.0.1";
     const keyIndex = args.indexOf("--api-key");
     const apiKey = keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null;
     if (!apiKey) {
@@ -31205,9 +31823,9 @@ var initConfig = () => {
     const model = modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null;
     const { createAgentServer: createAgentServer2 } = await Promise.resolve().then(() => (init_agent_server(), agent_server_exports));
     const app = createAgentServer2({ apiKey, provider, model });
-    app.listen(port, () => {
+    app.listen(port, host, () => {
       const modelStr = model ? ` model: ${model}` : "";
-      console.log(`Agent server listening on port ${port} (provider: ${provider}${modelStr})`);
+      console.log(`Agent server listening on ${host}:${port} (provider: ${provider}${modelStr})`);
     });
     return;
   }
@@ -31338,6 +31956,7 @@ ee-first/index.js:
    * MIT Licensed
    *)
 
+on-finished/index.js:
 on-finished/index.js:
   (*!
    * on-finished
@@ -31563,6 +32182,32 @@ serve-static/index.js:
    * Copyright(c) 2010 Sencha Inc.
    * Copyright(c) 2011 TJ Holowaychuk
    * Copyright(c) 2014-2016 Douglas Christopher Wilson
+   * MIT Licensed
+   *)
+
+basic-auth/index.js:
+  (*!
+   * basic-auth
+   * Copyright(c) 2013 TJ Holowaychuk
+   * Copyright(c) 2014 Jonathan Ong
+   * Copyright(c) 2015-2016 Douglas Christopher Wilson
+   * MIT Licensed
+   *)
+
+on-headers/index.js:
+  (*!
+   * on-headers
+   * Copyright(c) 2014 Douglas Christopher Wilson
+   * MIT Licensed
+   *)
+
+morgan/index.js:
+  (*!
+   * morgan
+   * Copyright(c) 2010 Sencha Inc.
+   * Copyright(c) 2011 TJ Holowaychuk
+   * Copyright(c) 2014 Jonathan Ong
+   * Copyright(c) 2014-2017 Douglas Christopher Wilson
    * MIT Licensed
    *)
 */
