@@ -2,10 +2,12 @@ import express from "express";
 import { randomUUID } from "crypto";
 import { ClaudeProvider } from "./ai-providers/claude.js";
 import { GeminiProvider } from "./ai-providers/gemini.js";
+import { EchoProvider } from "./ai-providers/echo.js";
 
 const AI_PROVIDERS = {
   claude: ClaudeProvider,
   gemini: GeminiProvider,
+  echo: EchoProvider,
 };
 
 /**

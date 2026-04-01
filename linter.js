@@ -460,7 +460,7 @@ const printHelp = () => {
   lines.push("SERVER OPTIONS (used with --server):");
   lines.push("  --port <number>       Port to listen on (default: 3000)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
-  lines.push("  --provider <name>     AI provider: claude (default) or gemini");
+  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");

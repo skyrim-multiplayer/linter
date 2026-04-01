@@ -23925,6 +23925,35 @@ var require_express2 = __commonJS({
   }
 });
 
+// ai-providers/echo.js
+var EchoProvider;
+var init_echo = __esm({
+  "ai-providers/echo.js"() {
+    init_base_ai_provider();
+    EchoProvider = class extends BaseAiProvider {
+      get name() {
+        return "echo";
+      }
+      checkDeps() {
+        return true;
+      }
+      async call(prompt, _options = {}) {
+        const isFixMode = prompt.includes("fixing assistant") || prompt.includes("fix mode");
+        if (isFixMode) {
+          return JSON.stringify({ pass: true, reason: "echo-ok (no fix needed)" });
+        }
+        return JSON.stringify({ pass: true, reason: "echo-ok" });
+      }
+      static getHelp() {
+        return {
+          name: "EchoProvider",
+          description: "Test provider that always returns pass:true. No AI calls made."
+        };
+      }
+    };
+  }
+});
+
 // agent-server.js
 var agent_server_exports = {};
 __export(agent_server_exports, {
@@ -24027,9 +24056,11 @@ var init_agent_server = __esm({
     import_express = __toESM(require_express2(), 1);
     init_claude();
     init_gemini();
+    init_echo();
     AI_PROVIDERS2 = {
       claude: ClaudeProvider,
-      gemini: GeminiProvider
+      gemini: GeminiProvider,
+      echo: EchoProvider
     };
   }
 });
@@ -30668,7 +30699,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "e768978" : "unknown";
+var LINTER_COMMIT = true ? "bc46b55" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31004,7 +31035,7 @@ var printHelp = () => {
   lines.push("SERVER OPTIONS (used with --server):");
   lines.push("  --port <number>       Port to listen on (default: 3000)");
   lines.push("  --api-key <key>       Bearer token required by clients (required)");
-  lines.push("  --provider <name>     AI provider: claude (default) or gemini");
+  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (testing)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
