@@ -7,7 +7,7 @@ import { ClaudeProvider } from "./ai-providers/claude.js";
 import { GeminiProvider } from "./ai-providers/gemini.js";
 import { EchoProvider } from "./ai-providers/echo.js";
 
-const TASK_TIMEOUT_MS = 120_000; // 2 minutes per AI call
+const TASK_TIMEOUT_MS = 300_000; // 5 minutes per AI call
 
 // Input validation limits
 const MAX_PROMPT_LENGTH = 100_000;
