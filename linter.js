@@ -607,8 +607,11 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
       : `Fix ${checkName} in ${relFile}`;
 
-    const storyDescription = checkPrd.userStoryDescription
-      ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
+    const rawDescription = Array.isArray(checkPrd.userStoryDescription)
+      ? checkPrd.userStoryDescription.join("\n")
+      : checkPrd.userStoryDescription;
+    const storyDescription = rawDescription
+      ? rawDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
       : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
 
     const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;

@@ -31502,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "f929322" : "unknown";
+var LINTER_COMMIT = true ? "43e86b7" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31946,7 +31946,8 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
     const idStr = `US-${String(counter).padStart(3, "0")}`;
     counter++;
     const title = checkPrd.userStoryTitle ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `Fix ${checkName} in ${relFile}`;
-    const storyDescription = checkPrd.userStoryDescription ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
+    const rawDescription = Array.isArray(checkPrd.userStoryDescription) ? checkPrd.userStoryDescription.join("\n") : checkPrd.userStoryDescription;
+    const storyDescription = rawDescription ? rawDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
     const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;
     const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
     const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
