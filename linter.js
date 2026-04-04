@@ -81,10 +81,15 @@ const loadConfig = async (mode) => {
       const fixer = new FixClass(REPO_ROOT, { ...entry.options, ...entry.fixWith.options });
       check = new CompositeCheck(check, fixer);
     }
+    // Assign config name as own property so it can be filtered by --checks
+    Object.defineProperty(check, "name", { value: entry.name, configurable: true, writable: true });
+    check._prdConfig = entry.prd || null;
     checks.push(check);
   }
 
-  return { fileSource, checks, toolsDir };
+  const prdConfig = config.prd || {};
+
+  return { fileSource, checks, toolsDir, prdConfig, checkEntries: config.checks };
 };
 
 /**
@@ -177,10 +182,14 @@ const formatFileResults = (results, file) => {
  *
  * Lint mode:  all (check, file) pairs run in parallel.
  * Fix mode:   one file at a time (sequential) to avoid races on shared files.
+ *
+ * Returns { extraFiles, failed, failedPairs } instead of calling process.exit(1).
+ * failedPairs: Array<{ file: string, checkName: string }>
  */
 const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
 
   const extraFiles = new Set();
+  const failedPairs = [];
 
   // Group checks by file instead of a sequential flat array
   const fileToChecks = new Map();
@@ -209,7 +218,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
 
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
-    return { extraFiles: new Set() };
+    return { extraFiles: new Set(), failed: false, failedPairs: [] };
   }
 
   console.log(`${lintOnly ? "Linting" : "Fixing"} ${totalChecks} check(s) across ${groupedWork.length} file(s)...`);
@@ -247,7 +256,14 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
               console.log(lines.join("\n"));
             }
           }
-          if (isFail) fail = true;
+          if (isFail) {
+            fail = true;
+            for (const { res, checkName } of results) {
+              if (res.status === "fail" || res.status === "error") {
+                failedPairs.push({ file, checkName });
+              }
+            }
+          }
         })
       )
     );
@@ -278,7 +294,14 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
           console.log(lines.join("\n"));
         }
       }
-      if (isFail) fail = true;
+      if (isFail) {
+        fail = true;
+        for (const { res, checkName } of fileResults) {
+          if (res.status === "fail" || res.status === "error") {
+            failedPairs.push({ file, checkName });
+          }
+        }
+      }
     }
   }
 
@@ -290,13 +313,11 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
   if (counters.error > 0) parts.push(`${counters.error} errored`);
   console.log(`Summary: ${parts.join(", ")}`);
 
-  if (fail) {
-    process.exit(1);
+  if (!fail) {
+    console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
   }
 
-  console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
-
-  return { extraFiles };
+  return { extraFiles, failed: fail, failedPairs };
 };
 
 /**
@@ -472,8 +493,11 @@ const printHelp = () => {
 
   lines.push("  --verbose             Print [PASS] lines (hidden by default)");
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
+  lines.push("  --checks <n1,n2,...>  Only run checks with these names (comma-separated, from config)");
+  lines.push("  --files <p1,p2,...>   Use these exact files instead of the configured file source");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("  --output-prd <path>   Write a ralph-compatible PRD JSON to <path> after linting (requires --lint)");
   lines.push("");
 
   // --- Built-in checks ---
@@ -542,6 +566,68 @@ const initConfig = () => {
   console.log(`Created ${path.relative(REPO_ROOT, configPath)}`);
 };
 
+/**
+ * Build a ralph-compatible PRD JSON from failed (file, check) pairs.
+ *
+ * @param {Array<{ file: string, checkName: string }>} failedPairs
+ * @param {object} prdConfig  Top-level `prd` object from linter-config.json (may be empty).
+ * @param {object[]} checkEntries  Raw check entries from linter-config.json (for per-check prd config).
+ * @returns {object}  PRD object ready to JSON.stringify.
+ */
+const buildPrd = (failedPairs, prdConfig, checkEntries) => {
+  const project = prdConfig.project || "Project";
+  const branchName = prdConfig.branchName || "ralph/lint-fixes";
+  const description = prdConfig.description || "Fix outstanding lint issues";
+
+  // Build a lookup: checkName -> prd config from check entry
+  const checkPrdMap = {};
+  for (const entry of checkEntries || []) {
+    if (entry.prd) {
+      checkPrdMap[entry.name] = entry.prd;
+    }
+  }
+
+  const userStories = [];
+  let counter = 1;
+
+  // Sort by file then check name for stable ordering
+  const sorted = [...failedPairs].sort((a, b) => {
+    const fileCmp = a.file.localeCompare(b.file);
+    return fileCmp !== 0 ? fileCmp : a.checkName.localeCompare(b.checkName);
+  });
+
+  for (const { file, checkName } of sorted) {
+    const relFile = relPath(file);
+    const checkPrd = checkPrdMap[checkName] || {};
+
+    const idStr = `US-${String(counter).padStart(3, "0")}`;
+    counter++;
+
+    const title = checkPrd.userStoryTitle
+      ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
+      : `Fix ${checkName} in ${relFile}`;
+
+    const storyDescription = checkPrd.userStoryDescription
+      ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
+      : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
+
+    const mainCriteria = `node dist/linter.mjs --lint --checks ${checkName} --files ${relFile}`;
+    const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
+    const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
+
+    userStories.push({
+      id: idStr,
+      title,
+      description: storyDescription,
+      acceptanceCriteria,
+      priority: counter - 1,
+      passes: false,
+      notes: "",
+    });
+  }
+
+  return { project, branchName, description, userStories };
+};
 
 
 /**
@@ -564,6 +650,9 @@ const initConfig = () => {
  *   --version        Show version and install method
  *   --upgrade        Upgrade to the latest version
  *   --init           Generate minimal linter-config.json
+ *   --checks <names>      Comma-separated list of check names to run (filters by config name)
+ *   --files <paths>       Comma-separated file paths to lint/fix (bypasses configured file source)
+ *   --output-prd <path>  Write a ralph-compatible PRD JSON to <path> (requires --lint)
  */
 (async () => {
   const args = process.argv.slice(2);
@@ -639,15 +728,50 @@ const initConfig = () => {
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
 
+  const outputPrdIndex = args.indexOf("--output-prd");
+  const outputPrdPath = outputPrdIndex !== -1 && args[outputPrdIndex + 1] ? args[outputPrdIndex + 1] : null;
+
+  if (outputPrdPath !== null && !shouldLint) {
+    console.error("--output-prd requires --lint to be specified.");
+    process.exit(1);
+  }
+
   const modeIndex = args.indexOf("--mode");
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
+
+  const checksIndex = args.indexOf("--checks");
+  const checksFilter = checksIndex !== -1 && args[checksIndex + 1]
+    ? args[checksIndex + 1].split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+
+  const filesIndex = args.indexOf("--files");
+  const filesArg = filesIndex !== -1 && args[filesIndex + 1]
+    ? args[filesIndex + 1].split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
 
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(127);
   }
   try {
-    const { fileSource, checks, toolsDir } = await loadConfig(mode);
+    let { fileSource, checks, toolsDir, prdConfig, checkEntries } = await loadConfig(mode);
+
+    // Apply --checks filter
+    if (checksFilter !== null) {
+      const found = new Set();
+      checks = checks.filter((c) => {
+        if (checksFilter.includes(c.name)) {
+          found.add(c.name);
+          return true;
+        }
+        return false;
+      });
+      for (const requested of checksFilter) {
+        if (!found.has(requested)) {
+          console.warn(`Warning: --checks: no check named "${requested}" found in config.`);
+        }
+      }
+    }
 
     if (checks.length === 0) {
       console.log(`No checks enabled for mode "${mode}".`);
@@ -662,7 +786,13 @@ const initConfig = () => {
       Object.assign(deps, await check.resolveDeps(toolOptions));
     }
 
-    const files = await fileSource.resolve();
+    // Apply --files override or use file source
+    let files;
+    if (filesArg !== null) {
+      files = filesArg.map((f) => path.isAbsolute(f) ? f : path.resolve(REPO_ROOT, f));
+    } else {
+      files = await fileSource.resolve();
+    }
     console.log(`${fileSource.name}: ${files.length} file(s)`);
 
     const startTime = Date.now();
@@ -676,9 +806,21 @@ const initConfig = () => {
         : `${seconds} seconds`;
     console.log(`Completed in ${timeStr}`);
 
+    // Write PRD if requested (before any exit calls)
+    if (outputPrdPath !== null) {
+      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries);
+      const absOutputPrdPath = path.isAbsolute(outputPrdPath) ? outputPrdPath : path.resolve(process.cwd(), outputPrdPath);
+      fs.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
+      console.log(`PRD written to ${absOutputPrdPath}`);
+    }
+
     if (files.length === 0) {
       console.log("No files were processed.");
       process.exit(0);
+    }
+
+    if (runResult.failed) {
+      process.exit(1);
     }
 
     if (!shouldFix) {

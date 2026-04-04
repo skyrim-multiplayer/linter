@@ -24675,7 +24675,7 @@ var init_agent_server = __esm({
     init_claude();
     init_gemini();
     init_echo();
-    TASK_TIMEOUT_MS = 12e4;
+    TASK_TIMEOUT_MS = 3e5;
     MAX_PROMPT_LENGTH = 1e5;
     MAX_FILE_PATH_LENGTH = 500;
     MAX_FILE_CONTENT_LENGTH = 5e5;
@@ -31502,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "3eceb23" : "unknown";
+var LINTER_COMMIT = true ? "c7ba3b3" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31550,9 +31550,12 @@ var loadConfig = async (mode) => {
       const fixer = new FixClass(REPO_ROOT, { ...entry.options, ...entry.fixWith.options });
       check = new CompositeCheck(check, fixer);
     }
+    Object.defineProperty(check, "name", { value: entry.name, configurable: true, writable: true });
+    check._prdConfig = entry.prd || null;
     checks.push(check);
   }
-  return { fileSource, checks, toolsDir };
+  const prdConfig = config.prd || {};
+  return { fileSource, checks, toolsDir, prdConfig, checkEntries: config.checks };
 };
 var relPath = (file) => {
   if (file.startsWith(REPO_ROOT + path16.sep)) {
@@ -31618,6 +31621,7 @@ var formatFileResults = (results, file) => {
 };
 var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
   const extraFiles = /* @__PURE__ */ new Set();
+  const failedPairs = [];
   const fileToChecks = /* @__PURE__ */ new Map();
   let totalChecks = 0;
   for (const check of checks) {
@@ -31641,7 +31645,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
   });
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
-    return { extraFiles: /* @__PURE__ */ new Set() };
+    return { extraFiles: /* @__PURE__ */ new Set(), failed: false, failedPairs: [] };
   }
   console.log(`${lintOnly ? "Linting" : "Fixing"} ${totalChecks} check(s) across ${groupedWork.length} file(s)...`);
   let fail = false;
@@ -31673,7 +31677,14 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
               console.log(lines.join("\n"));
             }
           }
-          if (isFail) fail = true;
+          if (isFail) {
+            fail = true;
+            for (const { res, checkName } of results) {
+              if (res.status === "fail" || res.status === "error") {
+                failedPairs.push({ file, checkName });
+              }
+            }
+          }
         })
       )
     );
@@ -31701,7 +31712,14 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
           console.log(lines.join("\n"));
         }
       }
-      if (isFail) fail = true;
+      if (isFail) {
+        fail = true;
+        for (const { res, checkName } of fileResults) {
+          if (res.status === "fail" || res.status === "error") {
+            failedPairs.push({ file, checkName });
+          }
+        }
+      }
     }
   }
   const parts = [`${totalChecks} check(s)`];
@@ -31710,11 +31728,10 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
   if (counters.fail > 0) parts.push(`${counters.fail} failed`);
   if (counters.error > 0) parts.push(`${counters.error} errored`);
   console.log(`Summary: ${parts.join(", ")}`);
-  if (fail) {
-    process.exit(1);
+  if (!fail) {
+    console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
   }
-  console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
-  return { extraFiles };
+  return { extraFiles, failed: fail, failedPairs };
 };
 var installHook = () => {
   const gitDirResult = spawnSync3("git", ["rev-parse", "--git-dir"], {
@@ -31849,8 +31866,11 @@ var printHelp = () => {
   lines.push("OPTIONS:");
   lines.push("  --verbose             Print [PASS] lines (hidden by default)");
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
+  lines.push("  --checks <n1,n2,...>  Only run checks with these names (comma-separated, from config)");
+  lines.push("  --files <p1,p2,...>   Use these exact files instead of the configured file source");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
+  lines.push("  --output-prd <path>   Write a ralph-compatible PRD JSON to <path> after linting (requires --lint)");
   lines.push("");
   lines.push("BUILT-IN CHECKS:");
   for (const [exportName, Cls] of Object.entries(builtinChecks)) {
@@ -31903,6 +31923,44 @@ var initConfig = () => {
   };
   fs18.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`Created ${path16.relative(REPO_ROOT, configPath)}`);
+};
+var buildPrd = (failedPairs, prdConfig, checkEntries) => {
+  const project = prdConfig.project || "Project";
+  const branchName = prdConfig.branchName || "ralph/lint-fixes";
+  const description = prdConfig.description || "Fix outstanding lint issues";
+  const checkPrdMap = {};
+  for (const entry of checkEntries || []) {
+    if (entry.prd) {
+      checkPrdMap[entry.name] = entry.prd;
+    }
+  }
+  const userStories = [];
+  let counter = 1;
+  const sorted2 = [...failedPairs].sort((a, b) => {
+    const fileCmp = a.file.localeCompare(b.file);
+    return fileCmp !== 0 ? fileCmp : a.checkName.localeCompare(b.checkName);
+  });
+  for (const { file, checkName } of sorted2) {
+    const relFile = relPath(file);
+    const checkPrd = checkPrdMap[checkName] || {};
+    const idStr = `US-${String(counter).padStart(3, "0")}`;
+    counter++;
+    const title = checkPrd.userStoryTitle ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `Fix ${checkName} in ${relFile}`;
+    const storyDescription = checkPrd.userStoryDescription ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
+    const mainCriteria = `node dist/linter.mjs --lint --checks ${checkName} --files ${relFile}`;
+    const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
+    const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
+    userStories.push({
+      id: idStr,
+      title,
+      description: storyDescription,
+      acceptanceCriteria,
+      priority: counter - 1,
+      passes: false,
+      notes: ""
+    });
+  }
+  return { project, branchName, description, userStories };
 };
 (async () => {
   const args = process.argv.slice(2);
@@ -31957,14 +32015,39 @@ var initConfig = () => {
   const verbose = args.includes("--verbose");
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
+  const outputPrdIndex = args.indexOf("--output-prd");
+  const outputPrdPath = outputPrdIndex !== -1 && args[outputPrdIndex + 1] ? args[outputPrdIndex + 1] : null;
+  if (outputPrdPath !== null && !shouldLint) {
+    console.error("--output-prd requires --lint to be specified.");
+    process.exit(1);
+  }
   const modeIndex = args.indexOf("--mode");
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
+  const checksIndex = args.indexOf("--checks");
+  const checksFilter = checksIndex !== -1 && args[checksIndex + 1] ? args[checksIndex + 1].split(",").map((s) => s.trim()).filter(Boolean) : null;
+  const filesIndex = args.indexOf("--files");
+  const filesArg = filesIndex !== -1 && args[filesIndex + 1] ? args[filesIndex + 1].split(",").map((s) => s.trim()).filter(Boolean) : null;
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(127);
   }
   try {
-    const { fileSource, checks, toolsDir } = await loadConfig(mode);
+    let { fileSource, checks, toolsDir, prdConfig, checkEntries } = await loadConfig(mode);
+    if (checksFilter !== null) {
+      const found = /* @__PURE__ */ new Set();
+      checks = checks.filter((c) => {
+        if (checksFilter.includes(c.name)) {
+          found.add(c.name);
+          return true;
+        }
+        return false;
+      });
+      for (const requested of checksFilter) {
+        if (!found.has(requested)) {
+          console.warn(`Warning: --checks: no check named "${requested}" found in config.`);
+        }
+      }
+    }
     if (checks.length === 0) {
       console.log(`No checks enabled for mode "${mode}".`);
       process.exit(0);
@@ -31975,7 +32058,12 @@ var initConfig = () => {
     for (const check of checks) {
       Object.assign(deps, await check.resolveDeps(toolOptions));
     }
-    const files = await fileSource.resolve();
+    let files;
+    if (filesArg !== null) {
+      files = filesArg.map((f) => path16.isAbsolute(f) ? f : path16.resolve(REPO_ROOT, f));
+    } else {
+      files = await fileSource.resolve();
+    }
     console.log(`${fileSource.name}: ${files.length} file(s)`);
     const startTime = Date.now();
     const runResult = await runChecks(files, checks, { lintOnly: shouldLint, verbose, ...deps });
@@ -31984,9 +32072,18 @@ var initConfig = () => {
     const seconds = (elapsedMs % 6e4 / 1e3).toFixed(2);
     const timeStr = minutes > 0 ? `${minutes} minutes, ${seconds} seconds` : `${seconds} seconds`;
     console.log(`Completed in ${timeStr}`);
+    if (outputPrdPath !== null) {
+      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries);
+      const absOutputPrdPath = path16.isAbsolute(outputPrdPath) ? outputPrdPath : path16.resolve(process.cwd(), outputPrdPath);
+      fs18.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
+      console.log(`PRD written to ${absOutputPrdPath}`);
+    }
     if (files.length === 0) {
       console.log("No files were processed.");
       process.exit(0);
+    }
+    if (runResult.failed) {
+      process.exit(1);
     }
     if (!shouldFix) {
       process.exit(0);
