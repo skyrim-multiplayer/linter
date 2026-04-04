@@ -31502,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "c7ba3b3" : "unknown";
+var LINTER_COMMIT = true ? "f929322" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31924,7 +31924,7 @@ var initConfig = () => {
   fs18.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`Created ${path16.relative(REPO_ROOT, configPath)}`);
 };
-var buildPrd = (failedPairs, prdConfig, checkEntries) => {
+var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   const project = prdConfig.project || "Project";
   const branchName = prdConfig.branchName || "ralph/lint-fixes";
   const description = prdConfig.description || "Fix outstanding lint issues";
@@ -31947,7 +31947,7 @@ var buildPrd = (failedPairs, prdConfig, checkEntries) => {
     counter++;
     const title = checkPrd.userStoryTitle ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `Fix ${checkName} in ${relFile}`;
     const storyDescription = checkPrd.userStoryDescription ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
-    const mainCriteria = `node dist/linter.mjs --lint --checks ${checkName} --files ${relFile}`;
+    const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;
     const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
     const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
     userStories.push({
@@ -32073,7 +32073,9 @@ var buildPrd = (failedPairs, prdConfig, checkEntries) => {
     const timeStr = minutes > 0 ? `${minutes} minutes, ${seconds} seconds` : `${seconds} seconds`;
     console.log(`Completed in ${timeStr}`);
     if (outputPrdPath !== null) {
-      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries);
+      const relScript = path16.relative(REPO_ROOT, process.argv[1]);
+      const baseCommand = relScript.startsWith("..") ? `node ${process.argv[1]}` : `node ${relScript}`;
+      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries, baseCommand);
       const absOutputPrdPath = path16.isAbsolute(outputPrdPath) ? outputPrdPath : path16.resolve(process.cwd(), outputPrdPath);
       fs18.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
       console.log(`PRD written to ${absOutputPrdPath}`);

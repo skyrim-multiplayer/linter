@@ -574,7 +574,7 @@ const initConfig = () => {
  * @param {object[]} checkEntries  Raw check entries from linter-config.json (for per-check prd config).
  * @returns {object}  PRD object ready to JSON.stringify.
  */
-const buildPrd = (failedPairs, prdConfig, checkEntries) => {
+const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   const project = prdConfig.project || "Project";
   const branchName = prdConfig.branchName || "ralph/lint-fixes";
   const description = prdConfig.description || "Fix outstanding lint issues";
@@ -611,7 +611,7 @@ const buildPrd = (failedPairs, prdConfig, checkEntries) => {
       ? checkPrd.userStoryDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
       : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
 
-    const mainCriteria = `node dist/linter.mjs --lint --checks ${checkName} --files ${relFile}`;
+    const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;
     const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
     const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
 
@@ -808,7 +808,9 @@ const buildPrd = (failedPairs, prdConfig, checkEntries) => {
 
     // Write PRD if requested (before any exit calls)
     if (outputPrdPath !== null) {
-      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries);
+      const relScript = path.relative(REPO_ROOT, process.argv[1]);
+      const baseCommand = relScript.startsWith("..") ? `node ${process.argv[1]}` : `node ${relScript}`;
+      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries, baseCommand);
       const absOutputPrdPath = path.isAbsolute(outputPrdPath) ? outputPrdPath : path.resolve(process.cwd(), outputPrdPath);
       fs.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
       console.log(`PRD written to ${absOutputPrdPath}`);
