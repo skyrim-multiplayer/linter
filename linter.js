@@ -590,43 +590,67 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   const userStories = [];
   let counter = 1;
 
-  // Sort by file then check name for stable ordering
-  const sorted = [...failedPairs].sort((a, b) => {
-    const fileCmp = a.file.localeCompare(b.file);
-    return fileCmp !== 0 ? fileCmp : a.checkName.localeCompare(b.checkName);
-  });
+  // Group by check name, sort files within each check alphabetically
+  const byCheck = new Map();
+  for (const { file, checkName } of failedPairs) {
+    if (!byCheck.has(checkName)) byCheck.set(checkName, []);
+    byCheck.get(checkName).push(file);
+  }
+  for (const files of byCheck.values()) files.sort((a, b) => a.localeCompare(b));
 
-  for (const { file, checkName } of sorted) {
-    const relFile = relPath(file);
+  // Sort checks alphabetically for stable output
+  const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  for (const [checkName, files] of sortedChecks) {
     const checkPrd = checkPrdMap[checkName] || {};
+    const filesPerStory = checkPrd.filesPerStory ?? 1;
 
-    const idStr = `US-${String(counter).padStart(3, "0")}`;
-    counter++;
+    for (let i = 0; i < files.length; i += filesPerStory) {
+      const chunk = files.slice(i, i + filesPerStory);
+      const relFiles = chunk.map(relPath);
+      const filesStr = relFiles.join(",");
+      const fileCount = chunk.length;
 
-    const title = checkPrd.userStoryTitle
-      ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
-      : `Fix ${checkName} in ${relFile}`;
+      const applyPlaceholders = (str) =>
+        str
+          .replace(/\{files?\}/g, relFiles.join(", "))
+          .replace(/\{fileCount\}/g, String(fileCount))
+          .replace(/\{check\}/g, checkName);
 
-    const rawDescription = Array.isArray(checkPrd.userStoryDescription)
-      ? checkPrd.userStoryDescription.join("\n")
-      : checkPrd.userStoryDescription;
-    const storyDescription = rawDescription
-      ? rawDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName)
-      : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
+      const idStr = `US-${String(counter).padStart(3, "0")}`;
+      counter++;
 
-    const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;
-    const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
-    const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
+      const defaultTitle = fileCount === 1
+        ? `Fix ${checkName} in ${relFiles[0]}`
+        : `Fix ${checkName} in ${fileCount} files`;
+      const title = checkPrd.userStoryTitle
+        ? applyPlaceholders(checkPrd.userStoryTitle)
+        : defaultTitle;
 
-    userStories.push({
-      id: idStr,
-      title,
-      description: storyDescription,
-      acceptanceCriteria,
-      priority: counter - 1,
-      passes: false,
-      notes: "",
-    });
+      const rawDescription = Array.isArray(checkPrd.userStoryDescription)
+        ? checkPrd.userStoryDescription.join("\n")
+        : checkPrd.userStoryDescription;
+      const defaultDescription = fileCount === 1
+        ? `As a developer, I need to fix ${checkName} issue in ${relFiles[0]} so the check passes.`
+        : `As a developer, I need to fix ${checkName} issues in ${fileCount} files so the checks pass.`;
+      const storyDescription = rawDescription
+        ? applyPlaceholders(rawDescription)
+        : defaultDescription;
+
+      const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+      const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
+      const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
+
+      userStories.push({
+        id: idStr,
+        title,
+        description: storyDescription,
+        acceptanceCriteria,
+        priority: counter - 1,
+        passes: false,
+        notes: "",
+      });
+    }
   }
 
   return { project, branchName, description, userStories };

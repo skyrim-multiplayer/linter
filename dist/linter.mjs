@@ -31502,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "43e86b7" : "unknown";
+var LINTER_COMMIT = true ? "aecaba2" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31936,30 +31936,42 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   }
   const userStories = [];
   let counter = 1;
-  const sorted2 = [...failedPairs].sort((a, b) => {
-    const fileCmp = a.file.localeCompare(b.file);
-    return fileCmp !== 0 ? fileCmp : a.checkName.localeCompare(b.checkName);
-  });
-  for (const { file, checkName } of sorted2) {
-    const relFile = relPath(file);
+  const byCheck = /* @__PURE__ */ new Map();
+  for (const { file, checkName } of failedPairs) {
+    if (!byCheck.has(checkName)) byCheck.set(checkName, []);
+    byCheck.get(checkName).push(file);
+  }
+  for (const files of byCheck.values()) files.sort((a, b) => a.localeCompare(b));
+  const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
+  for (const [checkName, files] of sortedChecks) {
     const checkPrd = checkPrdMap[checkName] || {};
-    const idStr = `US-${String(counter).padStart(3, "0")}`;
-    counter++;
-    const title = checkPrd.userStoryTitle ? checkPrd.userStoryTitle.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `Fix ${checkName} in ${relFile}`;
-    const rawDescription = Array.isArray(checkPrd.userStoryDescription) ? checkPrd.userStoryDescription.join("\n") : checkPrd.userStoryDescription;
-    const storyDescription = rawDescription ? rawDescription.replace(/\{file\}/g, relFile).replace(/\{check\}/g, checkName) : `As a developer, I need to fix ${checkName} issue in ${relFile} so the check passes.`;
-    const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${relFile}`;
-    const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
-    const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
-    userStories.push({
-      id: idStr,
-      title,
-      description: storyDescription,
-      acceptanceCriteria,
-      priority: counter - 1,
-      passes: false,
-      notes: ""
-    });
+    const filesPerStory = checkPrd.filesPerStory ?? 1;
+    for (let i = 0; i < files.length; i += filesPerStory) {
+      const chunk = files.slice(i, i + filesPerStory);
+      const relFiles = chunk.map(relPath);
+      const filesStr = relFiles.join(",");
+      const fileCount = chunk.length;
+      const applyPlaceholders = (str) => str.replace(/\{files?\}/g, relFiles.join(", ")).replace(/\{fileCount\}/g, String(fileCount)).replace(/\{check\}/g, checkName);
+      const idStr = `US-${String(counter).padStart(3, "0")}`;
+      counter++;
+      const defaultTitle = fileCount === 1 ? `Fix ${checkName} in ${relFiles[0]}` : `Fix ${checkName} in ${fileCount} files`;
+      const title = checkPrd.userStoryTitle ? applyPlaceholders(checkPrd.userStoryTitle) : defaultTitle;
+      const rawDescription = Array.isArray(checkPrd.userStoryDescription) ? checkPrd.userStoryDescription.join("\n") : checkPrd.userStoryDescription;
+      const defaultDescription = fileCount === 1 ? `As a developer, I need to fix ${checkName} issue in ${relFiles[0]} so the check passes.` : `As a developer, I need to fix ${checkName} issues in ${fileCount} files so the checks pass.`;
+      const storyDescription = rawDescription ? applyPlaceholders(rawDescription) : defaultDescription;
+      const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+      const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
+      const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
+      userStories.push({
+        id: idStr,
+        title,
+        description: storyDescription,
+        acceptanceCriteria,
+        priority: counter - 1,
+        passes: false,
+        notes: ""
+      });
+    }
   }
   return { project, branchName, description, userStories };
 };
