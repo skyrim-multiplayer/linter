@@ -31523,7 +31523,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "d5064f3" : "unknown";
+var LINTER_COMMIT = true ? "65dcd8f" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31991,21 +31991,27 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   for (const [groupName, members] of [...prdGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     const groupTitleTemplate = members.map((m) => m.checkPrd.groupTitle).find(Boolean);
     const groupDescTemplate = members.map((m) => m.checkPrd.groupDescription).find(Boolean);
-    const allRelFiles = [...new Set(members.flatMap((m) => m.files.map(relPath)))];
-    const allChecks = members.map((m) => m.checkName).join(", ");
-    const totalFiles = allRelFiles.length;
-    const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, allRelFiles.join(", ")).replace(/\{fileCount\}/g, String(totalFiles)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
-    const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : `Fix ${allChecks} issues (${groupName})`;
+    const filesPerStory = members.map((m) => m.checkPrd.filesPerStory).find((v) => v != null) ?? 1;
     const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
     const memberDescs = members.map((m) => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean);
-    const rawDesc = groupDescTemplate ? resolveDesc(groupDescTemplate) : memberDescs.length ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n") : null;
-    const storyDescription = rawDesc ? applyGroupPlaceholders(rawDesc) : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
-    const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(({ checkName, files }) => {
-      const filesStr = files.map(relPath).join(",");
-      return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
-    });
+    const rawDescTemplate = groupDescTemplate ? resolveDesc(groupDescTemplate) : memberDescs.length ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n") : null;
+    const allChecks = members.map((m) => m.checkName).join(", ");
     const extraCriteria = [...new Set(members.flatMap((m) => m.checkPrd.additionalAcceptanceCriteria || []))];
-    pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+    const allFiles = [...new Set(members.flatMap((m) => m.files))].sort((a, b) => a.localeCompare(b));
+    for (let i = 0; i < allFiles.length; i += filesPerStory) {
+      const chunkSet = new Set(allFiles.slice(i, i + filesPerStory));
+      const chunkRelFiles = [...chunkSet].map(relPath);
+      const fileCount = chunkRelFiles.length;
+      const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, chunkRelFiles.join(", ")).replace(/\{fileCount\}/g, String(fileCount)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
+      const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : fileCount === 1 ? `Fix ${allChecks} issues in ${chunkRelFiles[0]}` : `Fix ${allChecks} issues in ${fileCount} files (${groupName})`;
+      const storyDescription = rawDescTemplate ? applyGroupPlaceholders(rawDescTemplate) : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
+      const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(({ checkName, files }) => {
+        const matching = files.filter((f) => chunkSet.has(f)).map(relPath);
+        if (matching.length === 0) return null;
+        return `${baseCommand} --lint --checks ${checkName} --files ${matching.join(",")}`;
+      }).filter(Boolean);
+      pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+    }
   }
   for (const { checkName, files, checkPrd } of ungroupedChecks) {
     if (checkPrd.prdOnly) continue;

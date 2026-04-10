@@ -628,50 +628,64 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
     counter++;
   };
 
-  // Emit one story per prd group
+  // Emit stories per prd group, respecting filesPerStory
   for (const [groupName, members] of [...prdGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
     // Use groupTitle / groupDescription from the first member that defines them
     const groupTitleTemplate = members.map(m => m.checkPrd.groupTitle).find(Boolean);
     const groupDescTemplate = members.map(m => m.checkPrd.groupDescription).find(Boolean);
-
-    const allRelFiles = [...new Set(members.flatMap(m => m.files.map(relPath)))];
-    const allChecks = members.map(m => m.checkName).join(", ");
-    const totalFiles = allRelFiles.length;
-
-    const applyGroupPlaceholders = (str) =>
-      str
-        .replace(/\{files?\}/g, allRelFiles.join(", "))
-        .replace(/\{fileCount\}/g, String(totalFiles))
-        .replace(/\{checks?\}/g, allChecks)
-        .replace(/\{group\}/g, groupName);
-
-    const title = groupTitleTemplate
-      ? applyGroupPlaceholders(groupTitleTemplate)
-      : `Fix ${allChecks} issues (${groupName})`;
+    const filesPerStory = members.map(m => m.checkPrd.filesPerStory).find(v => v != null) ?? 1;
 
     // Description: groupDescription wins; fall back to merging userStoryDescription from all members
     const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
     const memberDescs = members.map(m => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean);
-    const rawDesc = groupDescTemplate
+    const rawDescTemplate = groupDescTemplate
       ? resolveDesc(groupDescTemplate)
       : memberDescs.length
         ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n")
         : null;
-    const storyDescription = rawDesc
-      ? applyGroupPlaceholders(rawDesc)
-      : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
 
-    // One acceptance criterion per check (preserves per-check file accuracy).
-    // Checks with prd.prdOnly: true are excluded — they exist only to shape the PRD.
-    const mainCriteria = members
-      .filter(({ checkPrd }) => !checkPrd.prdOnly)
-      .map(({ checkName, files }) => {
-        const filesStr = files.map(relPath).join(",");
-        return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
-      });
+    const allChecks = members.map(m => m.checkName).join(", ");
     // Collect any additionalAcceptanceCriteria from all members (deduplicated)
     const extraCriteria = [...new Set(members.flatMap(m => m.checkPrd.additionalAcceptanceCriteria || []))];
-    pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+
+    // Union of all files across the group, sorted — used for chunking
+    const allFiles = [...new Set(members.flatMap(m => m.files))].sort((a, b) => a.localeCompare(b));
+
+    for (let i = 0; i < allFiles.length; i += filesPerStory) {
+      const chunkSet = new Set(allFiles.slice(i, i + filesPerStory));
+      const chunkRelFiles = [...chunkSet].map(relPath);
+      const fileCount = chunkRelFiles.length;
+
+      const applyGroupPlaceholders = (str) =>
+        str
+          .replace(/\{files?\}/g, chunkRelFiles.join(", "))
+          .replace(/\{fileCount\}/g, String(fileCount))
+          .replace(/\{checks?\}/g, allChecks)
+          .replace(/\{group\}/g, groupName);
+
+      const title = groupTitleTemplate
+        ? applyGroupPlaceholders(groupTitleTemplate)
+        : fileCount === 1
+          ? `Fix ${allChecks} issues in ${chunkRelFiles[0]}`
+          : `Fix ${allChecks} issues in ${fileCount} files (${groupName})`;
+
+      const storyDescription = rawDescTemplate
+        ? applyGroupPlaceholders(rawDescTemplate)
+        : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
+
+      // One acceptance criterion per check, only for files in this chunk that failed that check.
+      // Checks with prd.prdOnly: true are excluded.
+      const mainCriteria = members
+        .filter(({ checkPrd }) => !checkPrd.prdOnly)
+        .map(({ checkName, files }) => {
+          const matching = files.filter(f => chunkSet.has(f)).map(relPath);
+          if (matching.length === 0) return null;
+          return `${baseCommand} --lint --checks ${checkName} --files ${matching.join(",")}`;
+        })
+        .filter(Boolean);
+
+      pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+    }
   }
 
   // Emit stories for ungrouped checks (original per-check, per-chunk logic).
