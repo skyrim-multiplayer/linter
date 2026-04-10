@@ -31523,7 +31523,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "65dcd8f" : "unknown";
+var LINTER_COMMIT = true ? "0628dc0" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -32005,11 +32005,9 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, chunkRelFiles.join(", ")).replace(/\{fileCount\}/g, String(fileCount)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
       const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : fileCount === 1 ? `Fix ${allChecks} issues in ${chunkRelFiles[0]}` : `Fix ${allChecks} issues in ${fileCount} files (${groupName})`;
       const storyDescription = rawDescTemplate ? applyGroupPlaceholders(rawDescTemplate) : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
-      const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(({ checkName, files }) => {
-        const matching = files.filter((f) => chunkSet.has(f)).map(relPath);
-        if (matching.length === 0) return null;
-        return `${baseCommand} --lint --checks ${checkName} --files ${matching.join(",")}`;
-      }).filter(Boolean);
+      const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(
+        ({ checkName }) => `${baseCommand} --lint --checks ${checkName} --files ${chunkRelFiles.join(",")}`
+      );
       pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
     }
   }

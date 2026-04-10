@@ -673,16 +673,13 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
         ? applyGroupPlaceholders(rawDescTemplate)
         : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
 
-      // One acceptance criterion per check, only for files in this chunk that failed that check.
+      // One acceptance criterion per check in the group (all checks, all chunk files).
       // Checks with prd.prdOnly: true are excluded.
       const mainCriteria = members
         .filter(({ checkPrd }) => !checkPrd.prdOnly)
-        .map(({ checkName, files }) => {
-          const matching = files.filter(f => chunkSet.has(f)).map(relPath);
-          if (matching.length === 0) return null;
-          return `${baseCommand} --lint --checks ${checkName} --files ${matching.join(",")}`;
-        })
-        .filter(Boolean);
+        .map(({ checkName }) =>
+          `${baseCommand} --lint --checks ${checkName} --files ${chunkRelFiles.join(",")}`
+        );
 
       pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
     }
