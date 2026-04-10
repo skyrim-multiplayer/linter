@@ -649,25 +649,32 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       ? applyGroupPlaceholders(groupTitleTemplate)
       : `Fix ${allChecks} issues (${groupName})`;
 
-    const rawDesc = Array.isArray(groupDescTemplate)
-      ? groupDescTemplate.join("\n")
-      : groupDescTemplate;
+    // Description: groupDescription wins; fall back to merging userStoryDescription from all members
+    const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
+    const rawDesc = groupDescTemplate
+      ? resolveDesc(groupDescTemplate)
+      : members.map(m => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean).join("\n") || null;
     const storyDescription = rawDesc
       ? applyGroupPlaceholders(rawDesc)
       : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
 
-    // One acceptance criterion per check (preserves per-check file accuracy)
-    const mainCriteria = members.map(({ checkName, files }) => {
-      const filesStr = files.map(relPath).join(",");
-      return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
-    });
+    // One acceptance criterion per check (preserves per-check file accuracy).
+    // Checks with prd.prdOnly: true are excluded — they exist only to shape the PRD.
+    const mainCriteria = members
+      .filter(({ checkPrd }) => !checkPrd.prdOnly)
+      .map(({ checkName, files }) => {
+        const filesStr = files.map(relPath).join(",");
+        return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+      });
     // Collect any additionalAcceptanceCriteria from all members (deduplicated)
     const extraCriteria = [...new Set(members.flatMap(m => m.checkPrd.additionalAcceptanceCriteria || []))];
     pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
   }
 
-  // Emit stories for ungrouped checks (original per-check, per-chunk logic)
+  // Emit stories for ungrouped checks (original per-check, per-chunk logic).
+  // prdOnly checks must belong to a group to be meaningful; skip them if ungrouped.
   for (const { checkName, files, checkPrd } of ungroupedChecks) {
+    if (checkPrd.prdOnly) continue;
     const filesPerStory = checkPrd.filesPerStory ?? 1;
 
     for (let i = 0; i < files.length; i += filesPerStory) {

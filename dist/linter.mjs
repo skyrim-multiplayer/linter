@@ -26738,6 +26738,26 @@ var TscCheck = class extends BaseCheck {
   }
 };
 
+// checks/always-fail-check.js
+var AlwaysFailCheck = class extends BaseCheck {
+  get name() {
+    return "always-fail";
+  }
+  async lint(_file, _deps) {
+    return { status: "fail", output: "always-fail: this check always fails" };
+  }
+  async fix(_file, _deps) {
+    return { status: "fail", output: "always-fail: this check cannot be fixed automatically" };
+  }
+  static getHelp() {
+    return {
+      name: "AlwaysFailCheck",
+      description: "Always fails every file. Use with prd.prdOnly to contribute to PRD user stories without generating acceptance criteria.",
+      options: "extensions, includePaths, excludePaths, textOnly, priority (inherited from BaseCheck)"
+    };
+  }
+};
+
 // file-sources/all-files-source.js
 import fs15 from "fs";
 import path13 from "path";
@@ -31486,7 +31506,8 @@ var builtinChecks = {
   FirecrawlCheck,
   AgentCheck,
   CompositeCheck,
-  TscCheck
+  TscCheck,
+  AlwaysFailCheck
 };
 var builtinFileSources = {
   AllFilesSource,
@@ -31502,7 +31523,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "96bc717" : "unknown";
+var LINTER_COMMIT = true ? "21465a8" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31975,9 +31996,10 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
     const totalFiles = allRelFiles.length;
     const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, allRelFiles.join(", ")).replace(/\{fileCount\}/g, String(totalFiles)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
     const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : `Fix ${allChecks} issues (${groupName})`;
-    const rawDesc = Array.isArray(groupDescTemplate) ? groupDescTemplate.join("\n") : groupDescTemplate;
+    const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
+    const rawDesc = groupDescTemplate ? resolveDesc(groupDescTemplate) : members.map((m) => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean).join("\n") || null;
     const storyDescription = rawDesc ? applyGroupPlaceholders(rawDesc) : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
-    const mainCriteria = members.map(({ checkName, files }) => {
+    const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(({ checkName, files }) => {
       const filesStr = files.map(relPath).join(",");
       return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
     });
@@ -31985,6 +32007,7 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
     pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
   }
   for (const { checkName, files, checkPrd } of ungroupedChecks) {
+    if (checkPrd.prdOnly) continue;
     const filesPerStory = checkPrd.filesPerStory ?? 1;
     for (let i = 0; i < files.length; i += filesPerStory) {
       const chunk = files.slice(i, i + filesPerStory);
