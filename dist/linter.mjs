@@ -31523,7 +31523,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "21465a8" : "unknown";
+var LINTER_COMMIT = true ? "d5064f3" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31997,7 +31997,8 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
     const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, allRelFiles.join(", ")).replace(/\{fileCount\}/g, String(totalFiles)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
     const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : `Fix ${allChecks} issues (${groupName})`;
     const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
-    const rawDesc = groupDescTemplate ? resolveDesc(groupDescTemplate) : members.map((m) => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean).join("\n") || null;
+    const memberDescs = members.map((m) => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean);
+    const rawDesc = groupDescTemplate ? resolveDesc(groupDescTemplate) : memberDescs.length ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n") : null;
     const storyDescription = rawDesc ? applyGroupPlaceholders(rawDesc) : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
     const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(({ checkName, files }) => {
       const filesStr = files.map(relPath).join(",");

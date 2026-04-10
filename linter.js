@@ -651,9 +651,12 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
 
     // Description: groupDescription wins; fall back to merging userStoryDescription from all members
     const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
+    const memberDescs = members.map(m => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean);
     const rawDesc = groupDescTemplate
       ? resolveDesc(groupDescTemplate)
-      : members.map(m => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean).join("\n") || null;
+      : memberDescs.length
+        ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n")
+        : null;
     const storyDescription = rawDesc
       ? applyGroupPlaceholders(rawDesc)
       : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
