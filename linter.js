@@ -601,6 +601,15 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   // Sort checks alphabetically for stable output
   const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+  // Build a lookup of ALL check names per group from the full config (not just failing ones)
+  const groupToAllCheckNames = new Map();
+  for (const entry of checkEntries || []) {
+    if (entry.prd?.group) {
+      if (!groupToAllCheckNames.has(entry.prd.group)) groupToAllCheckNames.set(entry.prd.group, []);
+      groupToAllCheckNames.get(entry.prd.group).push(entry.name);
+    }
+  }
+
   // Separate checks into prd-grouped vs ungrouped
   const prdGroups = new Map(); // groupName -> [{ checkName, files, checkPrd }]
   const ungroupedChecks = [];
@@ -673,13 +682,16 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
         ? applyGroupPlaceholders(rawDescTemplate)
         : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
 
-      // One acceptance criterion per check in the group (all checks, all chunk files).
-      // Checks with prd.prdOnly: true are excluded.
-      const mainCriteria = members
-        .filter(({ checkPrd }) => !checkPrd.prdOnly)
-        .map(({ checkName }) =>
-          `${baseCommand} --lint --checks ${checkName} --files ${chunkRelFiles.join(",")}`
-        );
+      // One acceptance criterion for the whole group using all check names (including non-failing),
+      // comma-separated. Checks with prd.prdOnly: true are excluded.
+      const allGroupCheckNames = (groupToAllCheckNames.get(groupName) || members.map(m => m.checkName))
+        .filter((name) => {
+          const entry = (checkEntries || []).find((e) => e.name === name);
+          return !entry?.prd?.prdOnly;
+        });
+      const mainCriteria = allGroupCheckNames.length > 0
+        ? [`${baseCommand} --lint --checks ${allGroupCheckNames.join(",")} --files ${chunkRelFiles.join(",")}`]
+        : [];
 
       pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
     }

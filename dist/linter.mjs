@@ -31523,7 +31523,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "0628dc0" : "unknown";
+var LINTER_COMMIT = true ? "db32b18" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31964,6 +31964,13 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   }
   for (const files of byCheck.values()) files.sort((a, b) => a.localeCompare(b));
   const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const groupToAllCheckNames = /* @__PURE__ */ new Map();
+  for (const entry of checkEntries || []) {
+    if (entry.prd?.group) {
+      if (!groupToAllCheckNames.has(entry.prd.group)) groupToAllCheckNames.set(entry.prd.group, []);
+      groupToAllCheckNames.get(entry.prd.group).push(entry.name);
+    }
+  }
   const prdGroups = /* @__PURE__ */ new Map();
   const ungroupedChecks = [];
   for (const [checkName, files] of sortedChecks) {
@@ -32005,9 +32012,11 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, chunkRelFiles.join(", ")).replace(/\{fileCount\}/g, String(fileCount)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
       const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : fileCount === 1 ? `Fix ${allChecks} issues in ${chunkRelFiles[0]}` : `Fix ${allChecks} issues in ${fileCount} files (${groupName})`;
       const storyDescription = rawDescTemplate ? applyGroupPlaceholders(rawDescTemplate) : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
-      const mainCriteria = members.filter(({ checkPrd }) => !checkPrd.prdOnly).map(
-        ({ checkName }) => `${baseCommand} --lint --checks ${checkName} --files ${chunkRelFiles.join(",")}`
-      );
+      const allGroupCheckNames = (groupToAllCheckNames.get(groupName) || members.map((m) => m.checkName)).filter((name) => {
+        const entry = (checkEntries || []).find((e) => e.name === name);
+        return !entry?.prd?.prdOnly;
+      });
+      const mainCriteria = allGroupCheckNames.length > 0 ? [`${baseCommand} --lint --checks ${allGroupCheckNames.join(",")} --files ${chunkRelFiles.join(",")}`] : [];
       pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
     }
   }
