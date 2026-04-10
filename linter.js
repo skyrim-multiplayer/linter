@@ -497,7 +497,7 @@ const printHelp = () => {
   lines.push("  --files <p1,p2,...>   Use these exact files instead of the configured file source");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
-  lines.push("  --output-prd <path>   Write a ralph-compatible PRD JSON to <path> after linting (requires --lint)");
+  lines.push("  --output-prd [path]   Write a ralph-compatible PRD JSON to [path] after linting (requires --lint); defaults to prd.json");
   lines.push("");
 
   // --- Built-in checks ---
@@ -601,8 +601,73 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   // Sort checks alphabetically for stable output
   const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
 
+  // Separate checks into prd-grouped vs ungrouped
+  const prdGroups = new Map(); // groupName -> [{ checkName, files, checkPrd }]
+  const ungroupedChecks = [];
   for (const [checkName, files] of sortedChecks) {
     const checkPrd = checkPrdMap[checkName] || {};
+    if (checkPrd.group) {
+      if (!prdGroups.has(checkPrd.group)) prdGroups.set(checkPrd.group, []);
+      prdGroups.get(checkPrd.group).push({ checkName, files, checkPrd });
+    } else {
+      ungroupedChecks.push({ checkName, files, checkPrd });
+    }
+  }
+
+  const pushStory = (title, storyDescription, acceptanceCriteria) => {
+    const idStr = `US-${String(counter).padStart(3, "0")}`;
+    userStories.push({
+      id: idStr,
+      title,
+      description: storyDescription,
+      acceptanceCriteria,
+      priority: counter,
+      passes: false,
+      notes: "",
+    });
+    counter++;
+  };
+
+  // Emit one story per prd group
+  for (const [groupName, members] of [...prdGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    // Use groupTitle / groupDescription from the first member that defines them
+    const groupTitleTemplate = members.map(m => m.checkPrd.groupTitle).find(Boolean);
+    const groupDescTemplate = members.map(m => m.checkPrd.groupDescription).find(Boolean);
+
+    const allRelFiles = [...new Set(members.flatMap(m => m.files.map(relPath)))];
+    const allChecks = members.map(m => m.checkName).join(", ");
+    const totalFiles = allRelFiles.length;
+
+    const applyGroupPlaceholders = (str) =>
+      str
+        .replace(/\{files?\}/g, allRelFiles.join(", "))
+        .replace(/\{fileCount\}/g, String(totalFiles))
+        .replace(/\{checks?\}/g, allChecks)
+        .replace(/\{group\}/g, groupName);
+
+    const title = groupTitleTemplate
+      ? applyGroupPlaceholders(groupTitleTemplate)
+      : `Fix ${allChecks} issues (${groupName})`;
+
+    const rawDesc = Array.isArray(groupDescTemplate)
+      ? groupDescTemplate.join("\n")
+      : groupDescTemplate;
+    const storyDescription = rawDesc
+      ? applyGroupPlaceholders(rawDesc)
+      : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
+
+    // One acceptance criterion per check (preserves per-check file accuracy)
+    const mainCriteria = members.map(({ checkName, files }) => {
+      const filesStr = files.map(relPath).join(",");
+      return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+    });
+    // Collect any additionalAcceptanceCriteria from all members (deduplicated)
+    const extraCriteria = [...new Set(members.flatMap(m => m.checkPrd.additionalAcceptanceCriteria || []))];
+    pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+  }
+
+  // Emit stories for ungrouped checks (original per-check, per-chunk logic)
+  for (const { checkName, files, checkPrd } of ungroupedChecks) {
     const filesPerStory = checkPrd.filesPerStory ?? 1;
 
     for (let i = 0; i < files.length; i += filesPerStory) {
@@ -616,9 +681,6 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
           .replace(/\{files?\}/g, relFiles.join(", "))
           .replace(/\{fileCount\}/g, String(fileCount))
           .replace(/\{check\}/g, checkName);
-
-      const idStr = `US-${String(counter).padStart(3, "0")}`;
-      counter++;
 
       const defaultTitle = fileCount === 1
         ? `Fix ${checkName} in ${relFiles[0]}`
@@ -639,17 +701,7 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
 
       const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
       const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
-      const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
-
-      userStories.push({
-        id: idStr,
-        title,
-        description: storyDescription,
-        acceptanceCriteria,
-        priority: counter - 1,
-        passes: false,
-        notes: "",
-      });
+      pushStory(title, storyDescription, [mainCriteria, ...additionalCriteria]);
     }
   }
 
@@ -756,7 +808,11 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   const shouldSearchInPath = !args.includes("--no-path");
 
   const outputPrdIndex = args.indexOf("--output-prd");
-  const outputPrdPath = outputPrdIndex !== -1 && args[outputPrdIndex + 1] ? args[outputPrdIndex + 1] : null;
+  let outputPrdPath = null;
+  if (outputPrdIndex !== -1) {
+    const next = args[outputPrdIndex + 1];
+    outputPrdPath = (next && !next.startsWith("--")) ? next : "prd.json";
+  }
 
   if (outputPrdPath !== null && !shouldLint) {
     console.error("--output-prd requires --lint to be specified.");

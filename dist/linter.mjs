@@ -31502,7 +31502,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "aecaba2" : "unknown";
+var LINTER_COMMIT = true ? "96bc717" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -31870,7 +31870,7 @@ var printHelp = () => {
   lines.push("  --files <p1,p2,...>   Use these exact files instead of the configured file source");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
-  lines.push("  --output-prd <path>   Write a ralph-compatible PRD JSON to <path> after linting (requires --lint)");
+  lines.push("  --output-prd [path]   Write a ralph-compatible PRD JSON to [path] after linting (requires --lint); defaults to prd.json");
   lines.push("");
   lines.push("BUILT-IN CHECKS:");
   for (const [exportName, Cls] of Object.entries(builtinChecks)) {
@@ -31943,8 +31943,48 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   }
   for (const files of byCheck.values()) files.sort((a, b) => a.localeCompare(b));
   const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
+  const prdGroups = /* @__PURE__ */ new Map();
+  const ungroupedChecks = [];
   for (const [checkName, files] of sortedChecks) {
     const checkPrd = checkPrdMap[checkName] || {};
+    if (checkPrd.group) {
+      if (!prdGroups.has(checkPrd.group)) prdGroups.set(checkPrd.group, []);
+      prdGroups.get(checkPrd.group).push({ checkName, files, checkPrd });
+    } else {
+      ungroupedChecks.push({ checkName, files, checkPrd });
+    }
+  }
+  const pushStory = (title, storyDescription, acceptanceCriteria) => {
+    const idStr = `US-${String(counter).padStart(3, "0")}`;
+    userStories.push({
+      id: idStr,
+      title,
+      description: storyDescription,
+      acceptanceCriteria,
+      priority: counter,
+      passes: false,
+      notes: ""
+    });
+    counter++;
+  };
+  for (const [groupName, members] of [...prdGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    const groupTitleTemplate = members.map((m) => m.checkPrd.groupTitle).find(Boolean);
+    const groupDescTemplate = members.map((m) => m.checkPrd.groupDescription).find(Boolean);
+    const allRelFiles = [...new Set(members.flatMap((m) => m.files.map(relPath)))];
+    const allChecks = members.map((m) => m.checkName).join(", ");
+    const totalFiles = allRelFiles.length;
+    const applyGroupPlaceholders = (str) => str.replace(/\{files?\}/g, allRelFiles.join(", ")).replace(/\{fileCount\}/g, String(totalFiles)).replace(/\{checks?\}/g, allChecks).replace(/\{group\}/g, groupName);
+    const title = groupTitleTemplate ? applyGroupPlaceholders(groupTitleTemplate) : `Fix ${allChecks} issues (${groupName})`;
+    const rawDesc = Array.isArray(groupDescTemplate) ? groupDescTemplate.join("\n") : groupDescTemplate;
+    const storyDescription = rawDesc ? applyGroupPlaceholders(rawDesc) : `As a developer, I need to fix ${allChecks} issues in ${totalFiles} file${totalFiles === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
+    const mainCriteria = members.map(({ checkName, files }) => {
+      const filesStr = files.map(relPath).join(",");
+      return `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+    });
+    const extraCriteria = [...new Set(members.flatMap((m) => m.checkPrd.additionalAcceptanceCriteria || []))];
+    pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+  }
+  for (const { checkName, files, checkPrd } of ungroupedChecks) {
     const filesPerStory = checkPrd.filesPerStory ?? 1;
     for (let i = 0; i < files.length; i += filesPerStory) {
       const chunk = files.slice(i, i + filesPerStory);
@@ -31952,8 +31992,6 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       const filesStr = relFiles.join(",");
       const fileCount = chunk.length;
       const applyPlaceholders = (str) => str.replace(/\{files?\}/g, relFiles.join(", ")).replace(/\{fileCount\}/g, String(fileCount)).replace(/\{check\}/g, checkName);
-      const idStr = `US-${String(counter).padStart(3, "0")}`;
-      counter++;
       const defaultTitle = fileCount === 1 ? `Fix ${checkName} in ${relFiles[0]}` : `Fix ${checkName} in ${fileCount} files`;
       const title = checkPrd.userStoryTitle ? applyPlaceholders(checkPrd.userStoryTitle) : defaultTitle;
       const rawDescription = Array.isArray(checkPrd.userStoryDescription) ? checkPrd.userStoryDescription.join("\n") : checkPrd.userStoryDescription;
@@ -31961,16 +31999,7 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       const storyDescription = rawDescription ? applyPlaceholders(rawDescription) : defaultDescription;
       const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
       const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
-      const acceptanceCriteria = [mainCriteria, ...additionalCriteria];
-      userStories.push({
-        id: idStr,
-        title,
-        description: storyDescription,
-        acceptanceCriteria,
-        priority: counter - 1,
-        passes: false,
-        notes: ""
-      });
+      pushStory(title, storyDescription, [mainCriteria, ...additionalCriteria]);
     }
   }
   return { project, branchName, description, userStories };
@@ -32029,7 +32058,11 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
   const outputPrdIndex = args.indexOf("--output-prd");
-  const outputPrdPath = outputPrdIndex !== -1 && args[outputPrdIndex + 1] ? args[outputPrdIndex + 1] : null;
+  let outputPrdPath = null;
+  if (outputPrdIndex !== -1) {
+    const next = args[outputPrdIndex + 1];
+    outputPrdPath = next && !next.startsWith("--") ? next : "prd.json";
+  }
   if (outputPrdPath !== null && !shouldLint) {
     console.error("--output-prd requires --lint to be specified.");
     process.exit(1);
