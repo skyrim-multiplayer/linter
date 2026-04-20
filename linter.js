@@ -476,14 +476,6 @@ const printHelp = () => {
   lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
-  lines.push("  --server              Start HTTP agent server (compatible with AgentCheck)");
-  lines.push("");
-  lines.push("SERVER OPTIONS (used with --server):");
-  lines.push("  --port <number>       Port to listen on (default: 3000, or AGENT_PORT)");
-  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1, or AGENT_HOST)");
-  lines.push("  --api-key <key>       Bearer token required by clients (or AGENT_API_KEY)");
-  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (or AGENT_PROVIDER)");
-  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini, or AGENT_MODEL)");
   lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
@@ -749,11 +741,6 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
  *   --verbose        Show [PASS] lines (hidden by default)
  *   --lint           Run checks in read-only mode (exit 1 on failure)
  *   --fix            Run checks in fix mode (modify files in-place)
- *   --server         Start HTTP agent server (compatible with AgentCheck)
- *   --port <number>  Server port (default: 3000)
- *   --host <address> Network interface to bind (default: 127.0.0.1)
- *   --api-key <key>  Bearer token for server auth (required with --server)
- *   --provider <n>   AI provider for server: claude (default) or gemini
  *   --no-download    Do not download tools if missing
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
@@ -792,46 +779,6 @@ const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
   if (args.includes("--init")) {
     initConfig();
     process.exit(0);
-  }
-
-  if (args.includes("--server")) {
-    const portIndex = args.indexOf("--port");
-    const port = parseInt(
-      (portIndex !== -1 && args[portIndex + 1] ? args[portIndex + 1] : null) ?? process.env.AGENT_PORT ?? "3000",
-      10
-    );
-
-    const hostIndex = args.indexOf("--host");
-    const host = (hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : null)
-      ?? process.env.AGENT_HOST
-      ?? "127.0.0.1";
-
-    const keyIndex = args.indexOf("--api-key");
-    const apiKey = (keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null)
-      ?? process.env.AGENT_API_KEY
-      ?? null;
-    if (!apiKey) {
-      console.error("--server requires --api-key <key> or AGENT_API_KEY env var");
-      process.exit(1);
-    }
-
-    const providerIndex = args.indexOf("--provider");
-    const provider = (providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : null)
-      ?? process.env.AGENT_PROVIDER
-      ?? "claude";
-
-    const modelIndex = args.indexOf("--model");
-    const model = (modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null)
-      ?? process.env.AGENT_MODEL
-      ?? null;
-
-    const { createAgentServer } = await import("./agent-server.js");
-    const app = createAgentServer({ apiKey, provider, model });
-    app.listen(port, host, () => {
-      const modelStr = model ? ` model: ${model}` : "";
-      console.log(`Agent server listening on ${host}:${port} (provider: ${provider}${modelStr})`);
-    });
-    return; // keep process alive
   }
 
   const shouldLint = args.includes("--lint");
