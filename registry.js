@@ -23,6 +23,9 @@ import { AllFilesSource } from "./file-sources/all-files-source.js";
 import { StagedFilesSource } from "./file-sources/staged-files-source.js";
 import { DiffBaseSource } from "./file-sources/diff-base-source.js";
 
+// --- expanders ---
+import { FileExpander } from "./expanders/file-expander.js";
+
 export const builtinChecks = {
   CrlfCheck,
   LinelintCheck,
@@ -43,7 +46,12 @@ export const builtinFileSources = {
   DiffBaseSource,
 };
 
+export const builtinExpanders = {
+  FileExpander,
+};
+
 export const builtinRegistry = {
   ...builtinChecks,
   ...builtinFileSources,
+  ...builtinExpanders,
 };

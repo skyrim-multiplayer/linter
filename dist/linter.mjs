@@ -1495,12 +1495,102 @@ import fs2 from "fs/promises";
 // checks/base-check.js
 import path from "path";
 import fs from "fs/promises";
+
+// expanders/base-expander.js
+var BaseExpander = class {
+  constructor(options = {}) {
+    this.options = options;
+  }
+  /**
+   * Expand a file into one or more entries.
+   * @param {string} file - Absolute path to the file.
+   * @returns {Promise<import("../entries/base-entry.js").BaseEntry[]>}
+   */
+  async expand(file) {
+    throw new Error("Not implemented: expand");
+  }
+  static getHelp() {
+    return {
+      name: "BaseExpander",
+      description: "Base class for expanders."
+    };
+  }
+};
+
+// entries/base-entry.js
+var BaseEntry = class {
+  /**
+   * Unique identifier for this entry, used in output and reports.
+   * For file entries this is the absolute path; for sub-entries it may
+   * include a suffix (e.g. "/repo/data.json[3]").
+   * @returns {string}
+   */
+  get id() {
+    throw new Error("Not implemented: id");
+  }
+  /**
+   * Absolute path that is passed to check.lint() / check.fix().
+   * Returns null for purely virtual entries that have no direct FS path.
+   * @returns {string | null}
+   */
+  get path() {
+    return null;
+  }
+  /**
+   * Absolute path of the real file on disk.
+   * Used by the runner when adding files to git staging after a fix.
+   * Defaults to path.
+   * @returns {string | null}
+   */
+  get sourceFile() {
+    return this.path;
+  }
+  /**
+   * Arbitrary metadata — index, offset, key, etc.
+   * Subclasses can populate this for checks that are entry-aware.
+   * @returns {object}
+   */
+  get metadata() {
+    return {};
+  }
+};
+
+// entries/file-entry.js
+var FileEntry = class extends BaseEntry {
+  #filePath;
+  constructor(filePath) {
+    super();
+    this.#filePath = filePath;
+  }
+  get id() {
+    return this.#filePath;
+  }
+  get path() {
+    return this.#filePath;
+  }
+};
+
+// expanders/file-expander.js
+var FileExpander = class extends BaseExpander {
+  async expand(file) {
+    return [new FileEntry(file)];
+  }
+  static getHelp() {
+    return {
+      name: "FileExpander",
+      description: "Default expander: yields one FileEntry per file (standard per-file behaviour)."
+    };
+  }
+};
+
+// checks/base-check.js
 var BaseCheck = class {
   #extensions;
   #includePaths;
   #excludePaths;
   #textOnly;
   #priority;
+  #expander;
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
     this.#extensions = (options.extensions || []).map((e) => e.toLowerCase());
@@ -1508,6 +1598,7 @@ var BaseCheck = class {
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
     this.#priority = options.priority ?? 0;
+    this.#expander = null;
   }
   /**
    * @returns {number} Numeric priority (lower runs first).
@@ -1520,6 +1611,28 @@ var BaseCheck = class {
    */
   get name() {
     throw new Error("Not implemented: name");
+  }
+  /**
+   * Set the expander used by expand().
+   * Called by the runner when "expander" is configured for this check.
+   * @param {import("../expanders/base-expander.js").BaseExpander} expander
+   */
+  setExpander(expander) {
+    this.#expander = expander;
+  }
+  /**
+   * Expand a file into one or more entries.
+   * By default delegates to FileExpander (one FileEntry per file).
+   * Override or configure a custom expander via "expander" in linter-config.json
+   * to produce multiple entries from a single file.
+   * @param {string} file - Absolute path to the file.
+   * @returns {Promise<import("../entries/base-entry.js").BaseEntry[]>}
+   */
+  async expand(file) {
+    if (!this.#expander) {
+      this.#expander = new FileExpander();
+    }
+    return this.#expander.expand(file);
   }
   /**
    * Whether this check's dependencies are satisfied.
@@ -1634,7 +1747,7 @@ var BaseCheck = class {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority, expander" };
   }
 };
 
@@ -7895,16 +8008,20 @@ var builtinFileSources = {
   StagedFilesSource,
   DiffBaseSource
 };
+var builtinExpanders = {
+  FileExpander
+};
 var builtinRegistry = {
   ...builtinChecks,
-  ...builtinFileSources
+  ...builtinFileSources,
+  ...builtinExpanders
 };
 
 // linter.js
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path15.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "b0208d4" : "unknown";
+var LINTER_COMMIT = true ? "bfbf8fe" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7954,6 +8071,11 @@ var loadConfig = async (mode) => {
     }
     Object.defineProperty(check, "name", { value: entry.name, configurable: true, writable: true });
     check._prdConfig = entry.prd || null;
+    if (entry.expander) {
+      const ExpanderClass = await resolveClass(entry.expander);
+      const expander = new ExpanderClass(entry.expander.options || {});
+      check.setExpander(expander);
+    }
     checks.push(check);
   }
   const prdConfig = config.prd || {};
@@ -8057,33 +8179,44 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
     await Promise.all(
       groupedWork.map(
         ({ file, checks: checks2 }) => limit(async () => {
-          const results = await Promise.all(
+          const rawResults = await Promise.all(
             checks2.map(async (check) => {
-              try {
-                const res = await check.lint(file, deps);
-                return { res, checkName: check.name };
-              } catch (err) {
-                return { res: { status: "error", output: err.message }, checkName: check.name };
-              }
+              const entries = await check.expand(file);
+              return Promise.all(entries.map(async (entry) => {
+                try {
+                  const res = await check.lint(entry.path ?? file, deps);
+                  return { res, checkName: check.name, entryId: entry.id };
+                } catch (err) {
+                  return { res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id };
+                }
+              }));
             })
           );
-          const { lines, isFail, stats } = formatFileResults(results, file);
-          counters.pass += stats.pass;
-          counters.fixed += stats.fixed;
-          counters.fail += stats.fail;
-          counters.error += stats.error;
-          if (lines.length > 0) {
-            if (isFail) {
-              console.error(lines.join("\n"));
-            } else if (verbose) {
-              console.log(lines.join("\n"));
-            }
+          const results = rawResults.flat();
+          const byEntry = /* @__PURE__ */ new Map();
+          for (const r of results) {
+            if (!byEntry.has(r.entryId)) byEntry.set(r.entryId, []);
+            byEntry.get(r.entryId).push(r);
           }
-          if (isFail) {
-            fail = true;
-            for (const { res, checkName } of results) {
-              if (res.status === "fail" || res.status === "error") {
-                failedPairs.push({ file, checkName });
+          for (const [entryId, entryResults] of byEntry) {
+            const { lines, isFail, stats } = formatFileResults(entryResults, entryId);
+            counters.pass += stats.pass;
+            counters.fixed += stats.fixed;
+            counters.fail += stats.fail;
+            counters.error += stats.error;
+            if (lines.length > 0) {
+              if (isFail) {
+                console.error(lines.join("\n"));
+              } else if (verbose) {
+                console.log(lines.join("\n"));
+              }
+            }
+            if (isFail) {
+              fail = true;
+              for (const { res, checkName } of entryResults) {
+                if (res.status === "fail" || res.status === "error") {
+                  failedPairs.push({ file: entryId, checkName });
+                }
               }
             }
           }
@@ -8094,31 +8227,42 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
     for (const { file, checks: checks2 } of groupedWork) {
       const fileResults = [];
       for (const check of checks2) {
-        try {
-          const res = typeof check.lintAndFix === "function" && await check.lintAndFix(file, deps) || await check.fix(file, deps);
-          if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
-          fileResults.push({ res, checkName: check.name });
-        } catch (err) {
-          fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name });
+        const entries = await check.expand(file);
+        for (const entry of entries) {
+          const entryPath = entry.path ?? file;
+          try {
+            const res = typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps) || await check.fix(entryPath, deps);
+            if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
+            fileResults.push({ res, checkName: check.name, entryId: entry.id });
+          } catch (err) {
+            fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id });
+          }
         }
       }
-      const { lines, isFail, stats } = formatFileResults(fileResults, file);
-      counters.pass += stats.pass;
-      counters.fixed += stats.fixed;
-      counters.fail += stats.fail;
-      counters.error += stats.error;
-      if (lines.length > 0) {
+      const byEntry = /* @__PURE__ */ new Map();
+      for (const r of fileResults) {
+        if (!byEntry.has(r.entryId)) byEntry.set(r.entryId, []);
+        byEntry.get(r.entryId).push(r);
+      }
+      for (const [entryId, entryResults] of byEntry) {
+        const { lines, isFail, stats } = formatFileResults(entryResults, entryId);
+        counters.pass += stats.pass;
+        counters.fixed += stats.fixed;
+        counters.fail += stats.fail;
+        counters.error += stats.error;
+        if (lines.length > 0) {
+          if (isFail) {
+            console.error(lines.join("\n"));
+          } else if (verbose) {
+            console.log(lines.join("\n"));
+          }
+        }
         if (isFail) {
-          console.error(lines.join("\n"));
-        } else if (verbose) {
-          console.log(lines.join("\n"));
-        }
-      }
-      if (isFail) {
-        fail = true;
-        for (const { res, checkName } of fileResults) {
-          if (res.status === "fail" || res.status === "error") {
-            failedPairs.push({ file, checkName });
+          fail = true;
+          for (const { res, checkName } of entryResults) {
+            if (res.status === "fail" || res.status === "error") {
+              failedPairs.push({ file: entryId, checkName });
+            }
           }
         }
       }
@@ -8280,6 +8424,18 @@ var printHelp = () => {
   lines.push("");
   lines.push("BUILT-IN FILE SOURCES:");
   for (const [exportName, Cls] of Object.entries(builtinFileSources)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+  lines.push("BUILT-IN EXPANDERS:");
+  for (const [exportName, Cls] of Object.entries(builtinExpanders)) {
     if (typeof Cls.getHelp === "function") {
       const h = Cls.getHelp();
       lines.push(`  ${exportName}`);

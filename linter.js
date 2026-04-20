@@ -5,7 +5,7 @@ import { spawnSync, execSync } from "child_process";
 import pLimit from "p-limit";
 
 import { ensureCleanExit } from "./util.js";
-import { builtinRegistry, builtinChecks, builtinFileSources } from "./registry.js";
+import { builtinRegistry, builtinChecks, builtinFileSources, builtinExpanders } from "./registry.js";
 import { CompositeCheck } from "./checks/composite-check.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -84,6 +84,11 @@ const loadConfig = async (mode) => {
     // Assign config name as own property so it can be filtered by --checks
     Object.defineProperty(check, "name", { value: entry.name, configurable: true, writable: true });
     check._prdConfig = entry.prd || null;
+    if (entry.expander) {
+      const ExpanderClass = await resolveClass(entry.expander);
+      const expander = new ExpanderClass(entry.expander.options || {});
+      check.setExpander(expander);
+    }
     checks.push(check);
   }
 
@@ -232,35 +237,47 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
     await Promise.all(
       groupedWork.map(({ file, checks }) =>
         limit(async () => {
-          // Run all checks for this file in parallel
-          const results = await Promise.all(
+          // For each check, expand the file into entries, then lint each entry
+          const rawResults = await Promise.all(
             checks.map(async (check) => {
-              try {
-                const res = await check.lint(file, deps);
-                return { res, checkName: check.name };
-              } catch (err) {
-                return { res: { status: "error", output: err.message }, checkName: check.name };
-              }
+              const entries = await check.expand(file);
+              return Promise.all(entries.map(async (entry) => {
+                try {
+                  const res = await check.lint(entry.path ?? file, deps);
+                  return { res, checkName: check.name, entryId: entry.id };
+                } catch (err) {
+                  return { res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id };
+                }
+              }));
             })
           );
+          const results = rawResults.flat();
 
-          const { lines, isFail, stats } = formatFileResults(results, file);
-          counters.pass += stats.pass;
-          counters.fixed += stats.fixed;
-          counters.fail += stats.fail;
-          counters.error += stats.error;
-          if (lines.length > 0) {
-            if (isFail) {
-              console.error(lines.join("\n"));
-            } else if (verbose) {
-              console.log(lines.join("\n"));
-            }
+          // Group results by entryId and format each group independently
+          const byEntry = new Map();
+          for (const r of results) {
+            if (!byEntry.has(r.entryId)) byEntry.set(r.entryId, []);
+            byEntry.get(r.entryId).push(r);
           }
-          if (isFail) {
-            fail = true;
-            for (const { res, checkName } of results) {
-              if (res.status === "fail" || res.status === "error") {
-                failedPairs.push({ file, checkName });
+          for (const [entryId, entryResults] of byEntry) {
+            const { lines, isFail, stats } = formatFileResults(entryResults, entryId);
+            counters.pass += stats.pass;
+            counters.fixed += stats.fixed;
+            counters.fail += stats.fail;
+            counters.error += stats.error;
+            if (lines.length > 0) {
+              if (isFail) {
+                console.error(lines.join("\n"));
+              } else if (verbose) {
+                console.log(lines.join("\n"));
+              }
+            }
+            if (isFail) {
+              fail = true;
+              for (const { res, checkName } of entryResults) {
+                if (res.status === "fail" || res.status === "error") {
+                  failedPairs.push({ file: entryId, checkName });
+                }
               }
             }
           }
@@ -273,32 +290,44 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
       const fileResults = [];
 
       for (const check of checks) {
-        try {
-          const res = (typeof check.lintAndFix === "function" && await check.lintAndFix(file, deps)) || await check.fix(file, deps);
-          if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
-          fileResults.push({ res, checkName: check.name });
-        } catch (err) {
-          fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name });
+        const entries = await check.expand(file);
+        for (const entry of entries) {
+          const entryPath = entry.path ?? file;
+          try {
+            const res = (typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps)) || await check.fix(entryPath, deps);
+            if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
+            fileResults.push({ res, checkName: check.name, entryId: entry.id });
+          } catch (err) {
+            fileResults.push({ res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id });
+          }
         }
       }
 
-      const { lines, isFail, stats } = formatFileResults(fileResults, file);
-      counters.pass += stats.pass;
-      counters.fixed += stats.fixed;
-      counters.fail += stats.fail;
-      counters.error += stats.error;
-      if (lines.length > 0) {
-        if (isFail) {
-          console.error(lines.join("\n"));
-        } else if (verbose) {
-          console.log(lines.join("\n"));
-        }
+      // Group by entryId for display
+      const byEntry = new Map();
+      for (const r of fileResults) {
+        if (!byEntry.has(r.entryId)) byEntry.set(r.entryId, []);
+        byEntry.get(r.entryId).push(r);
       }
-      if (isFail) {
-        fail = true;
-        for (const { res, checkName } of fileResults) {
-          if (res.status === "fail" || res.status === "error") {
-            failedPairs.push({ file, checkName });
+      for (const [entryId, entryResults] of byEntry) {
+        const { lines, isFail, stats } = formatFileResults(entryResults, entryId);
+        counters.pass += stats.pass;
+        counters.fixed += stats.fixed;
+        counters.fail += stats.fail;
+        counters.error += stats.error;
+        if (lines.length > 0) {
+          if (isFail) {
+            console.error(lines.join("\n"));
+          } else if (verbose) {
+            console.log(lines.join("\n"));
+          }
+        }
+        if (isFail) {
+          fail = true;
+          for (const { res, checkName } of entryResults) {
+            if (res.status === "fail" || res.status === "error") {
+              failedPairs.push({ file: entryId, checkName });
+            }
           }
         }
       }
@@ -509,6 +538,20 @@ const printHelp = () => {
   // --- Built-in file sources ---
   lines.push("BUILT-IN FILE SOURCES:");
   for (const [exportName, Cls] of Object.entries(builtinFileSources)) {
+    if (typeof Cls.getHelp === "function") {
+      const h = Cls.getHelp();
+      lines.push(`  ${exportName}`);
+      lines.push(`    ${h.description}`);
+      if (h.options) lines.push(`    Options: ${h.options}`);
+    } else {
+      lines.push(`  ${exportName}`);
+    }
+  }
+  lines.push("");
+
+  // --- Built-in expanders ---
+  lines.push("BUILT-IN EXPANDERS:");
+  for (const [exportName, Cls] of Object.entries(builtinExpanders)) {
     if (typeof Cls.getHelp === "function") {
       const h = Cls.getHelp();
       lines.push(`  ${exportName}`);

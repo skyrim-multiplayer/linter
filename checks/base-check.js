@@ -1,5 +1,6 @@
 import path from "path";
 import fs from "fs/promises";
+import { FileExpander } from "../expanders/file-expander.js";
 
 /**
  * @typedef {"pass" | "fail" | "fixed" | "error"} CheckStatus
@@ -33,6 +34,7 @@ export class BaseCheck {
   #excludePaths;
   #textOnly;
   #priority;
+  #expander;
 
   constructor(repoRoot, options = {}) {
     this.repoRoot = repoRoot;
@@ -41,6 +43,7 @@ export class BaseCheck {
     this.#excludePaths = options.excludePaths || [];
     this.#textOnly = options.textOnly ?? false;
     this.#priority = options.priority ?? 0;
+    this.#expander = null;
   }
 
   /**
@@ -55,6 +58,30 @@ export class BaseCheck {
    */
   get name() {
     throw new Error("Not implemented: name");
+  }
+
+  /**
+   * Set the expander used by expand().
+   * Called by the runner when "expander" is configured for this check.
+   * @param {import("../expanders/base-expander.js").BaseExpander} expander
+   */
+  setExpander(expander) {
+    this.#expander = expander;
+  }
+
+  /**
+   * Expand a file into one or more entries.
+   * By default delegates to FileExpander (one FileEntry per file).
+   * Override or configure a custom expander via "expander" in linter-config.json
+   * to produce multiple entries from a single file.
+   * @param {string} file - Absolute path to the file.
+   * @returns {Promise<import("../entries/base-entry.js").BaseEntry[]>}
+   */
+  async expand(file) {
+    if (!this.#expander) {
+      this.#expander = new FileExpander();
+    }
+    return this.#expander.expand(file);
   }
 
   /**
@@ -186,6 +213,6 @@ export class BaseCheck {
    * @returns {{ name: string, description: string, options: string }}
    */
   static getHelp() {
-    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority" };
+    return { name: "BaseCheck", description: "Abstract base class for checks.", options: "extensions, includePaths, excludePaths, textOnly, priority, expander" };
   }
 }
