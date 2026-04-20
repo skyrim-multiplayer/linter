@@ -7,7 +7,6 @@ import pLimit from "p-limit";
 import { ensureCleanExit } from "./util.js";
 import { builtinRegistry, builtinChecks, builtinFileSources } from "./registry.js";
 import { CompositeCheck } from "./checks/composite-check.js";
-import { startAgentServer } from "./agent-server.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -82,10 +81,15 @@ const loadConfig = async (mode) => {
       const fixer = new FixClass(REPO_ROOT, { ...entry.options, ...entry.fixWith.options });
       check = new CompositeCheck(check, fixer);
     }
+    // Assign config name as own property so it can be filtered by --checks
+    Object.defineProperty(check, "name", { value: entry.name, configurable: true, writable: true });
+    check._prdConfig = entry.prd || null;
     checks.push(check);
   }
 
-  return { fileSource, checks, toolsDir };
+  const prdConfig = config.prd || {};
+
+  return { fileSource, checks, toolsDir, prdConfig, checkEntries: config.checks };
 };
 
 /**
@@ -178,10 +182,14 @@ const formatFileResults = (results, file) => {
  *
  * Lint mode:  all (check, file) pairs run in parallel.
  * Fix mode:   one file at a time (sequential) to avoid races on shared files.
+ *
+ * Returns { extraFiles, failed, failedPairs } instead of calling process.exit(1).
+ * failedPairs: Array<{ file: string, checkName: string }>
  */
 const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
 
   const extraFiles = new Set();
+  const failedPairs = [];
 
   // Group checks by file instead of a sequential flat array
   const fileToChecks = new Map();
@@ -210,7 +218,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
 
   if (groupedWork.length === 0) {
     console.log("No matching files found for checks.");
-    return { extraFiles: new Set() };
+    return { extraFiles: new Set(), failed: false, failedPairs: [] };
   }
 
   console.log(`${lintOnly ? "Linting" : "Fixing"} ${totalChecks} check(s) across ${groupedWork.length} file(s)...`);
@@ -248,7 +256,14 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
               console.log(lines.join("\n"));
             }
           }
-          if (isFail) fail = true;
+          if (isFail) {
+            fail = true;
+            for (const { res, checkName } of results) {
+              if (res.status === "fail" || res.status === "error") {
+                failedPairs.push({ file, checkName });
+              }
+            }
+          }
         })
       )
     );
@@ -279,7 +294,14 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
           console.log(lines.join("\n"));
         }
       }
-      if (isFail) fail = true;
+      if (isFail) {
+        fail = true;
+        for (const { res, checkName } of fileResults) {
+          if (res.status === "fail" || res.status === "error") {
+            failedPairs.push({ file, checkName });
+          }
+        }
+      }
     }
   }
 
@@ -291,13 +313,11 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
   if (counters.error > 0) parts.push(`${counters.error} errored`);
   console.log(`Summary: ${parts.join(", ")}`);
 
-  if (fail) {
-    process.exit(1);
+  if (!fail) {
+    console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
   }
 
-  console.log(`${lintOnly ? "Linting" : "Fixing"} completed.`);
-
-  return { extraFiles };
+  return { extraFiles, failed: fail, failedPairs };
 };
 
 /**
@@ -456,8 +476,15 @@ const printHelp = () => {
   lines.push("  --fix                 Run checks in fix mode (modify files in-place)");
   lines.push("  --install-hook        Install as a git pre-commit hook and exit");
   lines.push("  --init                Generate a minimal linter-config.json in the repo root");
-
-  lines.push("  --serve-agent         Start the agent server for AgentCheck");
+  lines.push("  --server              Start HTTP agent server (compatible with AgentCheck)");
+  lines.push("");
+  lines.push("SERVER OPTIONS (used with --server):");
+  lines.push("  --port <number>       Port to listen on (default: 3000, or AGENT_PORT)");
+  lines.push("  --host <address>      Network interface to bind (default: 127.0.0.1, or AGENT_HOST)");
+  lines.push("  --api-key <key>       Bearer token required by clients (or AGENT_API_KEY)");
+  lines.push("  --provider <name>     AI provider: claude (default), gemini, or echo (or AGENT_PROVIDER)");
+  lines.push("  --model <name>        Model to use (e.g. gemini-2.0-flash-lite for gemini, or AGENT_MODEL)");
+  lines.push("");
   lines.push("  --help                Show this help message");
   lines.push("  --version             Show version and install method");
   lines.push("  --upgrade             Upgrade to the latest version");
@@ -466,11 +493,11 @@ const printHelp = () => {
 
   lines.push("  --verbose             Print [PASS] lines (hidden by default)");
   lines.push("  --mode <name>         Execution mode from config (default: manual)");
+  lines.push("  --checks <n1,n2,...>  Only run checks with these names (comma-separated, from config)");
+  lines.push("  --files <p1,p2,...>   Use these exact files instead of the configured file source");
   lines.push("  --no-download         Do not download tools if missing");
   lines.push("  --no-path             Do not search for tools in PATH");
-  lines.push("  --port <number>       Port for --serve-agent (default: 3000)");
-  lines.push("  --agent-api-key <key> API key for --serve-agent (prefix with $ to read env var)");
-  lines.push("  --ai-provider <name>  AI provider for --serve-agent: claude (default) or gemini");
+  lines.push("  --output-prd [path]   Write a ralph-compatible PRD JSON to [path] after linting (requires --lint); defaults to prd.json");
   lines.push("");
 
   // --- Built-in checks ---
@@ -539,6 +566,180 @@ const initConfig = () => {
   console.log(`Created ${path.relative(REPO_ROOT, configPath)}`);
 };
 
+/**
+ * Build a ralph-compatible PRD JSON from failed (file, check) pairs.
+ *
+ * @param {Array<{ file: string, checkName: string }>} failedPairs
+ * @param {object} prdConfig  Top-level `prd` object from linter-config.json (may be empty).
+ * @param {object[]} checkEntries  Raw check entries from linter-config.json (for per-check prd config).
+ * @returns {object}  PRD object ready to JSON.stringify.
+ */
+const buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
+  const project = prdConfig.project || "Project";
+  const branchName = prdConfig.branchName || "ralph/lint-fixes";
+  const description = prdConfig.description || "Fix outstanding lint issues";
+
+  // Build a lookup: checkName -> prd config from check entry
+  const checkPrdMap = {};
+  for (const entry of checkEntries || []) {
+    if (entry.prd) {
+      checkPrdMap[entry.name] = entry.prd;
+    }
+  }
+
+  const userStories = [];
+  let counter = 1;
+
+  // Group by check name, sort files within each check alphabetically
+  const byCheck = new Map();
+  for (const { file, checkName } of failedPairs) {
+    if (!byCheck.has(checkName)) byCheck.set(checkName, []);
+    byCheck.get(checkName).push(file);
+  }
+  for (const files of byCheck.values()) files.sort((a, b) => a.localeCompare(b));
+
+  // Sort checks alphabetically for stable output
+  const sortedChecks = [...byCheck.entries()].sort(([a], [b]) => a.localeCompare(b));
+
+  // Build a lookup of ALL check names per group from the full config (not just failing ones)
+  const groupToAllCheckNames = new Map();
+  for (const entry of checkEntries || []) {
+    if (entry.prd?.group) {
+      if (!groupToAllCheckNames.has(entry.prd.group)) groupToAllCheckNames.set(entry.prd.group, []);
+      groupToAllCheckNames.get(entry.prd.group).push(entry.name);
+    }
+  }
+
+  // Separate checks into prd-grouped vs ungrouped
+  const prdGroups = new Map(); // groupName -> [{ checkName, files, checkPrd }]
+  const ungroupedChecks = [];
+  for (const [checkName, files] of sortedChecks) {
+    const checkPrd = checkPrdMap[checkName] || {};
+    if (checkPrd.group) {
+      if (!prdGroups.has(checkPrd.group)) prdGroups.set(checkPrd.group, []);
+      prdGroups.get(checkPrd.group).push({ checkName, files, checkPrd });
+    } else {
+      ungroupedChecks.push({ checkName, files, checkPrd });
+    }
+  }
+
+  const pushStory = (title, storyDescription, acceptanceCriteria) => {
+    const idStr = `US-${String(counter).padStart(3, "0")}`;
+    userStories.push({
+      id: idStr,
+      title,
+      description: storyDescription,
+      acceptanceCriteria,
+      priority: counter,
+      passes: false,
+      notes: "",
+    });
+    counter++;
+  };
+
+  // Emit stories per prd group, respecting filesPerStory
+  for (const [groupName, members] of [...prdGroups.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    // Use groupTitle / groupDescription from the first member that defines them
+    const groupTitleTemplate = members.map(m => m.checkPrd.groupTitle).find(Boolean);
+    const groupDescTemplate = members.map(m => m.checkPrd.groupDescription).find(Boolean);
+    const filesPerStory = members.map(m => m.checkPrd.filesPerStory).find(v => v != null) ?? 1;
+
+    // Description: groupDescription wins; fall back to merging userStoryDescription from all members
+    const resolveDesc = (v) => Array.isArray(v) ? v.join("\n") : v;
+    const memberDescs = members.map(m => resolveDesc(m.checkPrd.userStoryDescription)).filter(Boolean);
+    const rawDescTemplate = groupDescTemplate
+      ? resolveDesc(groupDescTemplate)
+      : memberDescs.length
+        ? memberDescs.map((d, i) => `${i + 1}) ${d}`).join("\n\n")
+        : null;
+
+    const allChecks = members.map(m => m.checkName).join(", ");
+    // Collect any additionalAcceptanceCriteria from all members (deduplicated)
+    const extraCriteria = [...new Set(members.flatMap(m => m.checkPrd.additionalAcceptanceCriteria || []))];
+
+    // Union of all files across the group, sorted — used for chunking
+    const allFiles = [...new Set(members.flatMap(m => m.files))].sort((a, b) => a.localeCompare(b));
+
+    for (let i = 0; i < allFiles.length; i += filesPerStory) {
+      const chunkSet = new Set(allFiles.slice(i, i + filesPerStory));
+      const chunkRelFiles = [...chunkSet].map(relPath);
+      const fileCount = chunkRelFiles.length;
+
+      const applyGroupPlaceholders = (str) =>
+        str
+          .replace(/\{files?\}/g, chunkRelFiles.join(", "))
+          .replace(/\{fileCount\}/g, String(fileCount))
+          .replace(/\{checks?\}/g, allChecks)
+          .replace(/\{group\}/g, groupName);
+
+      const title = groupTitleTemplate
+        ? applyGroupPlaceholders(groupTitleTemplate)
+        : fileCount === 1
+          ? `Fix ${allChecks} issues in ${chunkRelFiles[0]}`
+          : `Fix ${allChecks} issues in ${fileCount} files (${groupName})`;
+
+      const storyDescription = rawDescTemplate
+        ? applyGroupPlaceholders(rawDescTemplate)
+        : `As a developer, I need to fix ${allChecks} issues in ${fileCount} file${fileCount === 1 ? "" : "s"} so all checks in the "${groupName}" group pass.`;
+
+      // One acceptance criterion for the whole group using all check names (including non-failing),
+      // comma-separated. Checks with prd.prdOnly: true are excluded.
+      const allGroupCheckNames = (groupToAllCheckNames.get(groupName) || members.map(m => m.checkName))
+        .filter((name) => {
+          const entry = (checkEntries || []).find((e) => e.name === name);
+          return !entry?.prd?.prdOnly;
+        });
+      const mainCriteria = allGroupCheckNames.length > 0
+        ? [`${baseCommand} --lint --checks ${allGroupCheckNames.join(",")} --files ${chunkRelFiles.join(",")}`]
+        : [];
+
+      pushStory(title, storyDescription, [...mainCriteria, ...extraCriteria]);
+    }
+  }
+
+  // Emit stories for ungrouped checks (original per-check, per-chunk logic).
+  // prdOnly checks must belong to a group to be meaningful; skip them if ungrouped.
+  for (const { checkName, files, checkPrd } of ungroupedChecks) {
+    if (checkPrd.prdOnly) continue;
+    const filesPerStory = checkPrd.filesPerStory ?? 1;
+
+    for (let i = 0; i < files.length; i += filesPerStory) {
+      const chunk = files.slice(i, i + filesPerStory);
+      const relFiles = chunk.map(relPath);
+      const filesStr = relFiles.join(",");
+      const fileCount = chunk.length;
+
+      const applyPlaceholders = (str) =>
+        str
+          .replace(/\{files?\}/g, relFiles.join(", "))
+          .replace(/\{fileCount\}/g, String(fileCount))
+          .replace(/\{check\}/g, checkName);
+
+      const defaultTitle = fileCount === 1
+        ? `Fix ${checkName} in ${relFiles[0]}`
+        : `Fix ${checkName} in ${fileCount} files`;
+      const title = checkPrd.userStoryTitle
+        ? applyPlaceholders(checkPrd.userStoryTitle)
+        : defaultTitle;
+
+      const rawDescription = Array.isArray(checkPrd.userStoryDescription)
+        ? checkPrd.userStoryDescription.join("\n")
+        : checkPrd.userStoryDescription;
+      const defaultDescription = fileCount === 1
+        ? `As a developer, I need to fix ${checkName} issue in ${relFiles[0]} so the check passes.`
+        : `As a developer, I need to fix ${checkName} issues in ${fileCount} files so the checks pass.`;
+      const storyDescription = rawDescription
+        ? applyPlaceholders(rawDescription)
+        : defaultDescription;
+
+      const mainCriteria = `${baseCommand} --lint --checks ${checkName} --files ${filesStr}`;
+      const additionalCriteria = checkPrd.additionalAcceptanceCriteria || [];
+      pushStory(title, storyDescription, [mainCriteria, ...additionalCriteria]);
+    }
+  }
+
+  return { project, branchName, description, userStories };
+};
 
 
 /**
@@ -548,19 +749,22 @@ const initConfig = () => {
  *   --verbose        Show [PASS] lines (hidden by default)
  *   --lint           Run checks in read-only mode (exit 1 on failure)
  *   --fix            Run checks in fix mode (modify files in-place)
+ *   --server         Start HTTP agent server (compatible with AgentCheck)
+ *   --port <number>  Server port (default: 3000)
+ *   --host <address> Network interface to bind (default: 127.0.0.1)
+ *   --api-key <key>  Bearer token for server auth (required with --server)
+ *   --provider <n>   AI provider for server: claude (default) or gemini
  *   --no-download    Do not download tools if missing
  *   --no-path        Do not search for tools in PATH
  *   --mode <mode>    Execution mode (key in config.modes, default: manual)
  *   --install-hook   Install as a git pre-commit hook and exit
- *   --serve-agent    Start the agent server for AgentCheck
  *   --help           Show help message
  *   --version        Show version and install method
  *   --upgrade        Upgrade to the latest version
  *   --init           Generate minimal linter-config.json
- *   --port <n>       Port for agent server (default: 3000)
- *   --agent-api-key  API key for agent server
- *   --ai-provider    AI provider: claude or gemini
-
+ *   --checks <names>      Comma-separated list of check names to run (filters by config name)
+ *   --files <paths>       Comma-separated file paths to lint/fix (bypasses configured file source)
+ *   --output-prd <path>  Write a ralph-compatible PRD JSON to <path> (requires --lint)
  */
 (async () => {
   const args = process.argv.slice(2);
@@ -590,25 +794,45 @@ const initConfig = () => {
     process.exit(0);
   }
 
-  if (args.includes("--serve-agent")) {
-    const portIdx = args.indexOf("--port");
-    const port = portIdx !== -1 && args[portIdx + 1] ? parseInt(args[portIdx + 1], 10) : 3000;
+  if (args.includes("--server")) {
+    const portIndex = args.indexOf("--port");
+    const port = parseInt(
+      (portIndex !== -1 && args[portIndex + 1] ? args[portIndex + 1] : null) ?? process.env.AGENT_PORT ?? "3000",
+      10
+    );
 
-    const keyIdx = args.indexOf("--agent-api-key");
-    let agentApiKey = keyIdx !== -1 && args[keyIdx + 1] ? args[keyIdx + 1] : null;
-    if (agentApiKey && agentApiKey.startsWith("$")) {
-      agentApiKey = process.env[agentApiKey.slice(1)] || null;
+    const hostIndex = args.indexOf("--host");
+    const host = (hostIndex !== -1 && args[hostIndex + 1] ? args[hostIndex + 1] : null)
+      ?? process.env.AGENT_HOST
+      ?? "127.0.0.1";
+
+    const keyIndex = args.indexOf("--api-key");
+    const apiKey = (keyIndex !== -1 && args[keyIndex + 1] ? args[keyIndex + 1] : null)
+      ?? process.env.AGENT_API_KEY
+      ?? null;
+    if (!apiKey) {
+      console.error("--server requires --api-key <key> or AGENT_API_KEY env var");
+      process.exit(1);
     }
 
-    const provIdx = args.indexOf("--ai-provider");
-    const aiProvider = provIdx !== -1 && args[provIdx + 1] ? args[provIdx + 1] : "claude";
+    const providerIndex = args.indexOf("--provider");
+    const provider = (providerIndex !== -1 && args[providerIndex + 1] ? args[providerIndex + 1] : null)
+      ?? process.env.AGENT_PROVIDER
+      ?? "claude";
 
-    await startAgentServer({ port, apiKey: agentApiKey, aiProvider, repoRoot: REPO_ROOT });
-    // Server keeps the process alive; no exit.
-    return;
+    const modelIndex = args.indexOf("--model");
+    const model = (modelIndex !== -1 && args[modelIndex + 1] ? args[modelIndex + 1] : null)
+      ?? process.env.AGENT_MODEL
+      ?? null;
+
+    const { createAgentServer } = await import("./agent-server.js");
+    const app = createAgentServer({ apiKey, provider, model });
+    app.listen(port, host, () => {
+      const modelStr = model ? ` model: ${model}` : "";
+      console.log(`Agent server listening on ${host}:${port} (provider: ${provider}${modelStr})`);
+    });
+    return; // keep process alive
   }
-
-
 
   const shouldLint = args.includes("--lint");
   const shouldFix = args.includes("--fix");
@@ -616,15 +840,54 @@ const initConfig = () => {
   const shouldDownload = !args.includes("--no-download");
   const shouldSearchInPath = !args.includes("--no-path");
 
+  const outputPrdIndex = args.indexOf("--output-prd");
+  let outputPrdPath = null;
+  if (outputPrdIndex !== -1) {
+    const next = args[outputPrdIndex + 1];
+    outputPrdPath = (next && !next.startsWith("--")) ? next : "prd.json";
+  }
+
+  if (outputPrdPath !== null && !shouldLint) {
+    console.error("--output-prd requires --lint to be specified.");
+    process.exit(1);
+  }
+
   const modeIndex = args.indexOf("--mode");
   const mode = modeIndex !== -1 && args[modeIndex + 1] ? args[modeIndex + 1] : "manual";
+
+  const checksIndex = args.indexOf("--checks");
+  const checksFilter = checksIndex !== -1 && args[checksIndex + 1]
+    ? args[checksIndex + 1].split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
+
+  const filesIndex = args.indexOf("--files");
+  const filesArg = filesIndex !== -1 && args[filesIndex + 1]
+    ? args[filesIndex + 1].split(",").map((s) => s.trim()).filter(Boolean)
+    : null;
 
   if (!shouldLint && !shouldFix) {
     console.error("Either --lint or --fix must be specified. Run --help for usage.");
     process.exit(127);
   }
   try {
-    const { fileSource, checks, toolsDir } = await loadConfig(mode);
+    let { fileSource, checks, toolsDir, prdConfig, checkEntries } = await loadConfig(mode);
+
+    // Apply --checks filter
+    if (checksFilter !== null) {
+      const found = new Set();
+      checks = checks.filter((c) => {
+        if (checksFilter.includes(c.name)) {
+          found.add(c.name);
+          return true;
+        }
+        return false;
+      });
+      for (const requested of checksFilter) {
+        if (!found.has(requested)) {
+          console.warn(`Warning: --checks: no check named "${requested}" found in config.`);
+        }
+      }
+    }
 
     if (checks.length === 0) {
       console.log(`No checks enabled for mode "${mode}".`);
@@ -639,7 +902,13 @@ const initConfig = () => {
       Object.assign(deps, await check.resolveDeps(toolOptions));
     }
 
-    const files = await fileSource.resolve();
+    // Apply --files override or use file source
+    let files;
+    if (filesArg !== null) {
+      files = filesArg.map((f) => path.isAbsolute(f) ? f : path.resolve(REPO_ROOT, f));
+    } else {
+      files = await fileSource.resolve();
+    }
     console.log(`${fileSource.name}: ${files.length} file(s)`);
 
     const startTime = Date.now();
@@ -653,9 +922,23 @@ const initConfig = () => {
         : `${seconds} seconds`;
     console.log(`Completed in ${timeStr}`);
 
+    // Write PRD if requested (before any exit calls)
+    if (outputPrdPath !== null) {
+      const relScript = path.relative(REPO_ROOT, process.argv[1]);
+      const baseCommand = relScript.startsWith("..") ? `node ${process.argv[1]}` : `node ${relScript}`;
+      const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries, baseCommand);
+      const absOutputPrdPath = path.isAbsolute(outputPrdPath) ? outputPrdPath : path.resolve(process.cwd(), outputPrdPath);
+      fs.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
+      console.log(`PRD written to ${absOutputPrdPath}`);
+    }
+
     if (files.length === 0) {
       console.log("No files were processed.");
       process.exit(0);
+    }
+
+    if (runResult.failed) {
+      process.exit(1);
     }
 
     if (!shouldFix) {

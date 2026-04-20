@@ -1,209 +1,188 @@
-import http from "http";
-import crypto from "crypto";
+import express from "express";
+import { randomUUID } from "crypto";
+import os from "os";
+import morgan from "morgan";
+import tsscmp from "tsscmp";
 import { ClaudeProvider } from "./ai-providers/claude.js";
 import { GeminiProvider } from "./ai-providers/gemini.js";
+import { EchoProvider } from "./ai-providers/echo.js";
+
+const TASK_TIMEOUT_MS = 300_000; // 5 minutes per AI call
+
+// Input validation limits
+const MAX_PROMPT_LENGTH = 100_000;
+const MAX_FILE_PATH_LENGTH = 500;
+const MAX_FILE_CONTENT_LENGTH = 500_000;
+const MAX_FILES_COUNT = 50;
 
 const AI_PROVIDERS = {
   claude: ClaudeProvider,
   gemini: GeminiProvider,
+  echo: EchoProvider,
 };
 
 /**
- * Start the agent server that implements the async task API
- * expected by AgentCheck.
+ * Create and return an Express app implementing the agent-check.js task API:
+ *   POST /tasks  — submit a task, returns { taskId, status: "pending" }
+ *   GET  /tasks/:taskId — poll task status, returns { status, progress?, result?, error? }
  *
- * Protocol:
- *   POST /tasks          — create a new task
- *   GET  /tasks/{taskId} — poll task status
- *
- * @param {{ port?: number, apiKey?: string, aiProvider?: string, repoRoot?: string }} options
- * @returns {Promise<http.Server>}
+ * @param {{ apiKey: string, provider?: string }} options
  */
-export async function startAgentServer(options = {}) {
-  const port = options.port || 3000;
-  const apiKey = options.apiKey || null;
-  const providerName = (options.aiProvider || "claude").toLowerCase();
-  const repoRoot = options.repoRoot || process.cwd();
-
-  const ProviderClass = AI_PROVIDERS[providerName];
+export function createAgentServer({ apiKey, provider = "claude", model = null }) {
+  const ProviderClass = AI_PROVIDERS[provider.toLowerCase()];
   if (!ProviderClass) {
-    throw new Error(`Unknown aiProvider "${providerName}". Available: ${Object.keys(AI_PROVIDERS).join(", ")}`);
+    throw new Error(`Unknown provider "${provider}". Available: ${Object.keys(AI_PROVIDERS).join(", ")}`);
   }
-  const provider = new ProviderClass();
+  const aiProvider = provider.toLowerCase() === "gemini"
+    ? new ProviderClass(model)
+    : new ProviderClass();
 
-  /** @type {Map<string, { status: string, result?: object, error?: string }>} */
+  const app = express();
+  app.use(express.json({ limit: "10mb" }));
+  app.use(morgan("combined"));
+
+  // In-memory task store: taskId → { status, progress?, result?, error? }
   const tasks = new Map();
 
-  /**
-   * Process a task asynchronously using the AI provider.
-   */
-  function processTask(taskId, payload) {
-    const { prompt, mode, primaryFile, files } = payload;
+  const authenticate = (req, res, next) => {
+    const auth = req.headers["authorization"] || "";
+    const token = auth.startsWith("Bearer ") ? auth.slice(7) : null;
+    if (!token || !tsscmp(token, apiKey)) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    next();
+  };
 
-    // Build context from files map
-    let context = "";
-    if (files && typeof files === "object") {
-      for (const [filePath, content] of Object.entries(files)) {
-        context += `--- ${filePath} ---\n${content}\n\n`;
+  // POST /tasks
+  app.post("/tasks", authenticate, (req, res) => {
+    const { prompt, mode, primaryFile, files } = req.body ?? {};
+
+    // Type and presence checks
+    if (!prompt || !mode || !primaryFile || !files) {
+      return res.status(400).json({ error: "Missing required fields: prompt, mode, primaryFile, files" });
+    }
+    if (typeof prompt !== "string") {
+      return res.status(400).json({ error: "prompt must be a string" });
+    }
+    if (typeof mode !== "string") {
+      return res.status(400).json({ error: "mode must be a string" });
+    }
+    if (typeof primaryFile !== "string") {
+      return res.status(400).json({ error: "primaryFile must be a string" });
+    }
+    if (typeof files !== "object" || Array.isArray(files)) {
+      return res.status(400).json({ error: "files must be a plain object" });
+    }
+
+    // Value constraints
+    if (mode !== "lint" && mode !== "fix") {
+      return res.status(400).json({ error: 'Invalid mode. Expected "lint" or "fix"' });
+    }
+    if (prompt.length > MAX_PROMPT_LENGTH) {
+      return res.status(400).json({ error: `prompt exceeds ${MAX_PROMPT_LENGTH} character limit` });
+    }
+    if (primaryFile.length > MAX_FILE_PATH_LENGTH) {
+      return res.status(400).json({ error: `primaryFile path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+    }
+    const fileEntries = Object.entries(files);
+    if (fileEntries.length > MAX_FILES_COUNT) {
+      return res.status(400).json({ error: `files object exceeds ${MAX_FILES_COUNT} entry limit` });
+    }
+    for (const [relPath, content] of fileEntries) {
+      if (typeof relPath !== "string" || relPath.length > MAX_FILE_PATH_LENGTH) {
+        return res.status(400).json({ error: `file path exceeds ${MAX_FILE_PATH_LENGTH} character limit` });
+      }
+      if (typeof content !== "string") {
+        return res.status(400).json({ error: `file content for "${relPath}" must be a string` });
+      }
+      if (content.length > MAX_FILE_CONTENT_LENGTH) {
+        return res.status(400).json({ error: `file content for "${relPath}" exceeds ${MAX_FILE_CONTENT_LENGTH} character limit` });
       }
     }
 
-    let aiPrompt;
+    const taskId = randomUUID();
+    const task = { id: taskId, status: "pending", progress: undefined, result: undefined, error: undefined };
+    tasks.set(taskId, task);
+
+    // Fire-and-forget — agent-check polls for completion
+    processTask(task, { prompt, mode, primaryFile, files }, aiProvider).catch(() => {});
+
+    res.status(201).json({ taskId, status: "pending" });
+  });
+
+  // GET /tasks/:taskId
+  app.get("/tasks/:taskId", authenticate, (req, res) => {
+    const task = tasks.get(req.params.taskId);
+    if (!task) {
+      return res.status(404).json({ error: "Task not found" });
+    }
+    const out = { status: task.status };
+    if (task.progress !== undefined) out.progress = task.progress;
+    if (task.result !== undefined) out.result = task.result;
+    if (task.error !== undefined) out.error = task.error;
+    res.json(out);
+  });
+
+  return app;
+}
+
+/**
+ * Process a task: build a prompt from the payload, call the AI provider,
+ * parse the JSON result, and update the task record.
+ *
+ * Expected AI responses:
+ *   lint: { "pass": bool, "reason": "..." }
+ *   fix:  { "pass": bool, "reason": "...", "files": { "<relPath>": "<content>" } }
+ */
+async function processTask(task, { prompt, mode, primaryFile, files }, aiProvider) {
+  task.status = "running";
+  task.progress = "Calling AI provider…";
+
+  try {
+    const fileContext = Object.entries(files)
+      .map(([relPath, content]) => `### ${relPath}\n\`\`\`\n${content}\n\`\`\``)
+      .join("\n\n");
+
+    let fullPrompt;
+
     if (mode === "lint") {
-      aiPrompt =
-        `You are a code review assistant.\n` +
+      fullPrompt =
+        `You are a code review assistant integrated into a linter.\n` +
         `Primary file: ${primaryFile}\n` +
         `Instruction: ${prompt}\n\n` +
-        `${context}\n` +
-        `Respond with ONLY a JSON object (no markdown fences):\n` +
+        `${fileContext}\n\n` +
+        `Respond with ONLY a JSON object (no markdown fences): ` +
         `{ "pass": true/false, "reason": "short explanation" }`;
     } else {
-      // fix mode
-      aiPrompt =
-        `You are a code fixing assistant.\n` +
+      fullPrompt =
+        `You are a code fixing assistant integrated into a linter.\n` +
         `Primary file: ${primaryFile}\n` +
         `Instruction: ${prompt}\n\n` +
-        `${context}\n` +
-        `Evaluate the file and fix it if needed.\n` +
-        `Respond with ONLY a JSON object (no markdown fences):\n` +
-        `If the file is fine: { "pass": true, "reason": "short explanation" }\n` +
-        `If fixes are needed: { "pass": false, "reason": "what was wrong", "files": { "relative/path": "full new content", ... } }\n` +
-        `Only include files that actually changed.`;
+        `${fileContext}\n\n` +
+        `Respond with ONLY a JSON object (no markdown fences): ` +
+        `{ "pass": true/false, "reason": "short explanation", "files": { "<relPath>": "<full new file content>" } }. ` +
+        `If no fix is needed, set pass to true and omit files. ` +
+        `If a fix is applied, set pass to false and include only the changed files in "files".`;
     }
 
-    tasks.get(taskId).status = "running";
+    const reply = await aiProvider.call(fullPrompt, { cwd: os.tmpdir(), timeout: TASK_TIMEOUT_MS });
 
-    provider.call(aiPrompt, { cwd: repoRoot }).then(
-      (reply) => {
-        let parsed;
-        try {
-          const jsonMatch = reply.match(/\{[\s\S]*\}/);
-          parsed = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-        } catch {
-          tasks.set(taskId, { status: "failed", error: `AI returned invalid JSON: ${reply.slice(0, 500)}` });
-          return;
-        }
-        tasks.set(taskId, { status: "completed", result: parsed });
-      },
-      (err) => {
-        tasks.set(taskId, { status: "failed", error: err.message });
-      },
-    );
-  }
-
-  /**
-   * Read the full request body (with a size limit).
-   * @returns {Promise<string>}
-   */
-  function readBody(req) {
-    return new Promise((resolve, reject) => {
-      const chunks = [];
-      let size = 0;
-      const MAX_BODY = 10 * 1024 * 1024; // 10 MB
-      req.on("data", (chunk) => {
-        size += chunk.length;
-        if (size > MAX_BODY) {
-          req.destroy();
-          reject(new Error("Request body too large"));
-          return;
-        }
-        chunks.push(chunk);
-      });
-      req.on("end", () => resolve(Buffer.concat(chunks).toString("utf-8")));
-      req.on("error", reject);
-    });
-  }
-
-  function sendJson(res, status, body) {
-    const data = JSON.stringify(body);
-    res.writeHead(status, {
-      "Content-Type": "application/json",
-      "Content-Length": Buffer.byteLength(data),
-    });
-    res.end(data);
-  }
-
-  function checkAuth(req, res) {
-    if (!apiKey) return true;
-    const auth = req.headers.authorization || "";
-    const token = auth.startsWith("Bearer ") ? auth.slice(7) : "";
-    if (token !== apiKey) {
-      sendJson(res, 401, { error: "Unauthorized" });
-      return false;
-    }
-    return true;
-  }
-
-  const server = http.createServer(async (req, res) => {
+    let result;
     try {
-      const url = new URL(req.url, `http://${req.headers.host}`);
-      const pathname = url.pathname.replace(/\/+$/, "");
-
-      // POST /tasks
-      if (req.method === "POST" && pathname === "/tasks") {
-        if (!checkAuth(req, res)) return;
-
-        let payload;
-        try {
-          const body = await readBody(req);
-          payload = JSON.parse(body);
-        } catch (err) {
-          sendJson(res, 400, { error: `Invalid JSON: ${err.message}` });
-          return;
-        }
-
-        if (!payload.prompt || !payload.primaryFile) {
-          sendJson(res, 400, { error: "Missing required fields: prompt, primaryFile" });
-          return;
-        }
-
-        const taskId = crypto.randomUUID();
-        tasks.set(taskId, { status: "pending" });
-        sendJson(res, 201, { taskId, status: "pending" });
-
-        // Start processing asynchronously
-        processTask(taskId, payload);
-        return;
-      }
-
-      // GET /tasks/{taskId}
-      const taskMatch = pathname.match(/^\/tasks\/([^/]+)$/);
-      if (req.method === "GET" && taskMatch) {
-        if (!checkAuth(req, res)) return;
-
-        const taskId = decodeURIComponent(taskMatch[1]);
-        const task = tasks.get(taskId);
-        if (!task) {
-          sendJson(res, 404, { error: "Task not found" });
-          return;
-        }
-
-        sendJson(res, 200, { taskId, ...task });
-
-        // Clean up completed/failed tasks after they're polled
-        if (task.status === "completed" || task.status === "failed") {
-          tasks.delete(taskId);
-        }
-        return;
-      }
-
-      sendJson(res, 404, { error: "Not found" });
-    } catch (err) {
-      sendJson(res, 500, { error: "Internal server error" });
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
+    } catch {
+      task.status = "failed";
+      task.error = `AI returned invalid JSON: ${reply.slice(0, 300)}`;
+      return;
     }
-  });
 
-  return new Promise((resolve, reject) => {
-    server.on("error", reject);
-    server.listen(port, () => {
-      console.log(`Agent server listening on http://localhost:${port}`);
-      console.log(`AI provider: ${provider.name}`);
-      if (apiKey) {
-        console.log(`API key: configured`);
-      } else {
-        console.log(`API key: none (open access)`);
-      }
-      resolve(server);
-    });
-  });
+    task.status = "completed";
+    task.progress = undefined;
+    task.result = result;
+  } catch (err) {
+    task.status = "failed";
+    task.progress = undefined;
+    task.error = err.message;
+  }
 }
