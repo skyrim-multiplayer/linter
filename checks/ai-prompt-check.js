@@ -2,6 +2,7 @@ import path from "path";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
 import { GeminiProvider } from "../ai-providers/gemini.js";
+import { OpenAICompatibleProvider } from "../ai-providers/openai-compatible.js";
 import {
   coerce, coerceArray, standardTemplates, resolvePaths, dedupePaths,
   buildFileContext, lockfilePath, lockMatchesContent, lockWriteContent,
@@ -10,6 +11,7 @@ import {
 const AI_PROVIDERS = {
   claude: ClaudeProvider,
   gemini: GeminiProvider,
+  openai: OpenAICompatibleProvider
 };
 
 /**
