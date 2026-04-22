@@ -124,6 +124,12 @@ export const getFileHash = async (file) => {
 };
 
 /**
+ * Compute a SHA-256 hash of an arbitrary string.
+ */
+export const getStringHash = (str) =>
+  createHash("sha256").update(str).digest("hex");
+
+/**
  * Check if a lock entry matches the current file content.
  * @param {string} checkName - The check's name (lock namespace).
  * @param {string} relFile - Relative file path (lock key).
@@ -163,5 +169,30 @@ export const lockWrite = async (checkName, relFile, absFile, repoRoot, opts = {}
   const writeUniversal = opts.lockValue === 1 || opts.lockValue === "1";
   lock[checkName][relFile] = writeUniversal ? 1 : await getFileHash(absFile);
 
+  await fs.writeFile(lp, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+};
+
+/**
+ * Check if a lock entry matches the given content string.
+ * Same as lockMatches but takes content directly instead of reading a file.
+ */
+export const lockMatchesContent = async (checkName, key, content, repoRoot) => {
+  const lock = await readLockfile(repoRoot);
+  const entry = lock[checkName]?.[key];
+  if (entry == null) return false;
+  if (entry === 1) return true;
+  if (typeof entry !== "string") return false;
+  return getStringHash(content) === entry;
+};
+
+/**
+ * Write a lock entry for a content string.
+ */
+export const lockWriteContent = async (checkName, key, content, repoRoot, opts = {}) => {
+  const lp = lockfilePath(repoRoot);
+  const lock = await readLockfile(repoRoot);
+  if (!lock[checkName]) lock[checkName] = {};
+  const writeUniversal = opts.lockValue === 1 || opts.lockValue === "1";
+  lock[checkName][key] = writeUniversal ? 1 : getStringHash(content);
   await fs.writeFile(lp, JSON.stringify(lock, null, 2) + "\n", "utf-8");
 };

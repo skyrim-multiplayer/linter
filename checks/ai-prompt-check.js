@@ -1,11 +1,10 @@
-import { promises as fs } from "fs";
 import path from "path";
 import { BaseCheck } from "./base-check.js";
 import { ClaudeProvider } from "../ai-providers/claude.js";
 import { GeminiProvider } from "../ai-providers/gemini.js";
 import {
   coerce, coerceArray, standardTemplates, resolvePaths, dedupePaths,
-  buildFileContext, lockfilePath, lockMatches, lockWrite,
+  buildFileContext, lockfilePath, lockMatchesContent, lockWriteContent,
 } from "./check-utils.js";
 
 const AI_PROVIDERS = {
@@ -14,30 +13,25 @@ const AI_PROVIDERS = {
 };
 
 /**
- * AI Prompt check — invokes an AI CLI (Claude or Gemini) in a
- * text-only workflow.
+ * AI Prompt check — pure string-in / string-out.
+ *
+ * Operates on a content string supplied by the entry (via entry.readContent()).
+ * For a plain FileEntry that string is the whole file; for a virtual entry like
+ * JsonArrayEntry it is just the slice (e.g. one JSON array element). The check
+ * itself is oblivious — it never opens the source file, never knows what kind
+ * of slice it received. Modified content is returned as a string and the runner
+ * pipes it back through entry.writeBack().
  *
  * Options (from linter-config.json):
  *   aiProvider     — which AI provider to use: "claude" (default) or "gemini"
  *   lintPrompt     — lint-specific instruction
  *   fixPrompt      — fix-specific instruction
  *   filesToRead    — additional files to include as context (array of paths)
- *                    Supports templates: {name_without_ext} (filename without ext),
- *                    {name_with_ext} (filename with ext), {ext} (extension with dot),
- *                    {dir} (directory relative to repo root).
- *   lock           — if true, cache AI results per file in .ai-prompt-lock.json;
- *                    files whose normalized-content hash hasn't changed are skipped.
- *                    Legacy lock value 1 is treated as a universal match.
- *   lockValue      — optional lock write mode; set to 1 to keep writing
- *                    universal lock entries instead of file hashes.
- *
- * Lint mode:
- *   Pipes selected file contents + prompt to the AI CLI and asks for a
- *   JSON verdict: { "pass": true/false, "reason": "..." }
- *
- * Fix mode:
- *   Sends selected file contents to the AI CLI and expects JSON with
- *   updated content for allowed files only. This check applies edits itself.
+ *                    Supports templates: {name_without_ext}, {name_with_ext},
+ *                    {ext}, {dir}.
+ *   lock           — if true, cache AI verdicts per entry in .ai-prompt-lock.json
+ *                    keyed by entry.id and content hash.
+ *   lockValue      — set to 1 to write universal lock entries instead of hashes.
  */
 export class AiPromptCheck extends BaseCheck {
   #lintPrompt;
@@ -82,175 +76,96 @@ export class AiPromptCheck extends BaseCheck {
     return standardTemplates();
   }
 
-  async lint(file, _deps) {
-    const relFile = path.relative(this.repoRoot, file);
+  get supportsInMemory() {
+    return true;
+  }
+
+  async lintInMemory(content, _deps, entry) {
     const instruction = this.#lintPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
 
-    const promptFiles = dedupePaths([file, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-    const context = await buildFileContext(promptFiles, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-
-    if (this.#lock && await lockMatches(this.name, relFile, file, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
 
-    const prompt =
-      `You are a code review assistant integrated into a linter.\n` +
-      `Primary file: ${relFile}\n` +
-      `Instruction: ${instruction}\n\n` +
-      `${context.value}\n\n` +
-      `Respond with ONLY a JSON object (no markdown fences): ` +
-      `{ "pass": true/false, "reason": "short explanation" }`;
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
 
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
-    }
+    const prompt = this.#buildLintPrompt(entry, instruction, content, ctx.value);
+    const verdict = await this.#callAndParse(prompt);
+    if (verdict.error) return { status: "error", output: verdict.error };
 
-    let verdict;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      verdict = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
+    const lockPath = lockfilePath(this.repoRoot);
+    if (verdict.value.pass) {
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
+      return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
-
-    if (verdict.pass) {
-      if (this.#lock) await lockWrite(this.name, relFile, file, this.repoRoot, { lockValue: this.#lockValue });
-      return { status: "pass" };
-    }
-    return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
+    return { status: "fail", output: verdict.value.reason || "AI check failed (no reason provided)" };
   }
 
-  async fix(file, _deps) {
-    const relFile = path.relative(this.repoRoot, file);
+  async fixInMemory(content, _deps, entry) {
     const instruction = this.#fixPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
     }
 
-    const absFile = path.resolve(file);
-    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-
-    const context = await buildFileContext(filesToRead, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-
-    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
 
-    const prompt =
-      `You are a code fixing assistant integrated into a linter.\n` +
-      `File to fix: ${relFile}\n` +
-      `Instruction: ${instruction}\n\n` +
-      `${context.value}\n\n` +
-      `Respond with ONLY a JSON object (no markdown fences): ` +
-      `{ "changed": true/false, "reason": "short explanation", "content": "full new file content" }. ` +
-      `If no changes are needed, set changed to false and omit content.`;
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
 
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
-    }
-
-    let result;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
-    }
+    const prompt = this.#buildFixPrompt(entry, instruction, content, ctx.value);
+    const parsed = await this.#callAndParse(prompt);
+    if (parsed.error) return { status: "error", output: parsed.error };
+    const result = parsed.value;
 
     const lockPath = lockfilePath(this.repoRoot);
 
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
-    let current;
-    try {
-      current = await fs.readFile(absFile, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    if (result.content === content) {
+      return { status: "pass", output: result.reason || "AI reported changes but content was identical" };
     }
 
-    if (current === result.content) {
-      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
-    }
+    if (this.#lock) await lockWriteContent(this.name, lockKey, result.content, this.repoRoot, { lockValue: this.#lockValue });
 
-    await fs.writeFile(absFile, result.content, "utf-8");
-
-    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
-
-    return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
+    return {
+      status: "fixed",
+      output: result.reason || "AI applied fixes",
+      content: result.content,
+      ...(this.#lock && { extraFiles: [lockPath] }),
+    };
   }
 
-  /**
-   * Combined lint + fix in a single AI call.
-   * When both lintPrompt and fixPrompt are configured, evaluates the file
-   * against lint criteria and applies the fix if needed — one round-trip.
-   * Returns null when combined mode is not available (only one prompt set).
-   */
-  async lintAndFix(file, _deps) {
+  async lintAndFixInMemory(content, _deps, entry) {
     if (!this.#lintPrompt || !this.#fixPrompt) return null;
 
-    const relFile = path.relative(this.repoRoot, file);
-    const absFile = path.resolve(file);
-    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-
-    const context = await buildFileContext(filesToRead, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-
-    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
 
-    const prompt =
-      `You are a code review and fixing assistant integrated into a linter.\n` +
-      `File: ${relFile}\n\n` +
-      `Lint criteria: ${this.#lintPrompt}\n` +
-      `Fix instruction: ${this.#fixPrompt}\n\n` +
-      `${context.value}\n\n` +
-      `First evaluate the file against the lint criteria.\n` +
-      `If the file PASSES, respond with ONLY a JSON object (no markdown fences):\n` +
-      `{ "pass": true, "reason": "short explanation" }\n\n` +
-      `If the file FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):\n` +
-      `{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected file content" }\n` +
-      `If the file fails but cannot be fixed, set pass to false and omit content.`;
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
 
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
-    }
-
-    let result;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
-    }
+    const prompt = this.#buildLintAndFixPrompt(entry, content, ctx.value);
+    const parsed = await this.#callAndParse(prompt);
+    if (parsed.error) return { status: "error", output: parsed.error };
+    const result = parsed.value;
 
     const lockPath = lockfilePath(this.repoRoot);
 
     if (result.pass) {
-      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...(this.#lock && { extraFiles: [lockPath] }) };
     }
 
@@ -258,37 +173,128 @@ export class AiPromptCheck extends BaseCheck {
       return { status: "fail", output: result.reason || "AI check failed and could not produce a fix" };
     }
 
-    let current;
+    if (result.content === content) {
+      return { status: "pass", output: result.reason || "AI reported changes but content was identical" };
+    }
+
+    if (this.#lock) await lockWriteContent(this.name, lockKey, result.content, this.repoRoot, { lockValue: this.#lockValue });
+
+    return {
+      status: "fixed",
+      output: result.reason || "AI applied fixes",
+      content: result.content,
+      ...(this.#lock && { extraFiles: [lockPath] }),
+    };
+  }
+
+  // ── prompt builders ──────────────────────────────────────────────────
+
+  #buildLintPrompt(entry, instruction, content, extraContext) {
+    return (
+      `You are a code review assistant integrated into a linter.\n` +
+      `Item: ${this.#entryLabel(entry)}\n` +
+      `Instruction: ${instruction}\n\n` +
+      `Content to review:\n${content}` +
+      (extraContext ? `\n\n${extraContext}` : "") +
+      `\n\nRespond with ONLY a JSON object (no markdown fences): ` +
+      `{ "pass": true/false, "reason": "short explanation" }`
+    );
+  }
+
+  #buildFixPrompt(entry, instruction, content, extraContext) {
+    return (
+      `You are a code fixing assistant integrated into a linter.\n` +
+      `Item to fix: ${this.#entryLabel(entry)}\n` +
+      `Instruction: ${instruction}\n\n` +
+      `Content to fix:\n${content}` +
+      (extraContext ? `\n\n${extraContext}` : "") +
+      `\n\nRespond with ONLY a JSON object (no markdown fences): ` +
+      `{ "changed": true/false, "reason": "short explanation", "content": "full new content as a string" }. ` +
+      `The "content" field, when present, must be the entire replacement content as a single string ` +
+      `(use the same format as the input — if it is JSON text, return JSON text). ` +
+      `If no changes are needed, set changed to false and omit content.`
+    );
+  }
+
+  #buildLintAndFixPrompt(entry, content, extraContext) {
+    return (
+      `You are a code review and fixing assistant integrated into a linter.\n` +
+      `Item: ${this.#entryLabel(entry)}\n\n` +
+      `Lint criteria: ${this.#lintPrompt}\n` +
+      `Fix instruction: ${this.#fixPrompt}\n\n` +
+      `Content:\n${content}` +
+      (extraContext ? `\n\n${extraContext}` : "") +
+      `\n\nFirst evaluate the content against the lint criteria.\n` +
+      `If it PASSES, respond with ONLY a JSON object (no markdown fences):\n` +
+      `{ "pass": true, "reason": "short explanation" }\n\n` +
+      `If it FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):\n` +
+      `{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected content as a string" }\n` +
+      `The "content" field must be the entire replacement content as a single string ` +
+      `(use the same format as the input — if it is JSON text, return JSON text).\n` +
+      `If it fails but cannot be fixed, set pass to false and omit content.`
+    );
+  }
+
+  // ── helpers ──────────────────────────────────────────────────────────
+
+  #entryLabel(entry) {
+    if (!entry) return "(unknown)";
+    if (entry.sourceFile) {
+      const rel = path.relative(this.repoRoot, entry.sourceFile);
+      const id = entry.id;
+      return id && id !== entry.sourceFile ? `${rel} (${path.basename(id)})` : rel;
+    }
+    return entry.id || "(unknown)";
+  }
+
+  #lockKey(entry) {
+    if (!entry?.sourceFile) return entry?.id ?? "(unknown)";
+    const rel = path.relative(this.repoRoot, entry.sourceFile);
+    if (!entry.isVirtual || !entry.id) return rel;
+    const suffix = entry.id.startsWith(entry.sourceFile)
+      ? entry.id.slice(entry.sourceFile.length)
+      : `:${entry.id}`;
+    return rel + suffix;
+  }
+
+  async #buildExtraContext(entry) {
+    if (this.#filesToRead.length === 0) return { value: "" };
+    const file = entry?.sourceFile ?? null;
+    const extra = resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot);
+    if (extra.length === 0) return { value: "" };
+    return buildFileContext(dedupePaths(extra), this.repoRoot);
+  }
+
+  async #callAndParse(prompt) {
+    let reply;
     try {
-      current = await fs.readFile(absFile, "utf-8");
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+      return { error: `${this.#provider.name} error: ${err.message}` };
     }
-
-    if (current === result.content) {
-      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    try {
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      return { value: JSON.parse(jsonMatch ? jsonMatch[0] : reply) };
+    } catch {
+      return { error: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
-
-    await fs.writeFile(absFile, result.content, "utf-8");
-
-    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
-
-    return { status: "fixed", output: result.reason || "AI applied fixes", ...(this.#lock && { extraFiles: [lockPath] }) };
   }
 
   static getHelp() {
     return {
       name: "AiPromptCheck",
       description:
-        "Invokes an AI CLI (Claude or Gemini) with a user-defined prompt. " +
-        "Lint asks the AI to evaluate pass/fail. Fix asks the AI for updated file content and applies it.",
+        "Invokes an AI provider with a user-defined prompt. Pure string-in / string-out: " +
+        "operates on whatever content the entry hands it (whole file via FileEntry, or a " +
+        "virtual slice via JsonArrayExpander, etc.). The entry is responsible for slicing " +
+        "and splicing; the check stays oblivious.",
       options:
         "aiProvider — which AI provider to use: 'claude' (default) or 'gemini'; " +
         "lintPrompt — lint-specific instruction (string or array); " +
         "fixPrompt — fix-specific instruction (string or array); " +
         "filesToRead — additional context files (array of paths, supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates); " +
-        "lock — cache AI results per file in .ai-prompt-lock.json (boolean, default false); " +
-        "lockValue — optional write mode, set to 1 to store universal lock entries instead of file hashes",
+        "lock — cache AI verdicts per entry in .ai-prompt-lock.json (boolean, default false); " +
+        "lockValue — optional write mode, set to 1 to store universal lock entries instead of hashes",
     };
   }
 }

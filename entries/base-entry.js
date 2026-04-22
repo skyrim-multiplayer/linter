@@ -1,39 +1,43 @@
+import { promises as fs } from "fs";
+
 /**
  * Represents a single unit of work for a check.
  *
  * By default the unit is a file, but subclasses can represent
  * virtual sub-units: a JSON array element, a binary record, etc.
  *
- * --- WHY Entry EXISTS (not just string paths) ---
+ * --- TWO INTERFACES ---
  *
- * An Expander answers "how many times to run a check on this file".
- * An Entry answers "what exactly to pass to each run".
+ * Entries expose two parallel ways for a check to consume them:
  *
- * For regular files both are trivial — one file, one path, same string.
- * The problem appears with virtual content:
+ *   1. File-based  — pass entry.path; the check does its own fs I/O.
+ *                    Required path for non-virtual entries.
  *
- *   // JsonArrayExpander needs to return something per element.
- *   // A plain string cannot serve two incompatible roles at once:
- *   //   1. id for display:  "data.json[3]"         ← not a real path
- *   //   2. path for lint:   "/repo/data.json"       ← real file on disk
+ *   2. Content-based (string in / string out) — call entry.readContent()
+ *                    to get a string slice, then entry.writeBack(newString)
+ *                    to splice it back. The check stays oblivious to file
+ *                    layout. Virtual entries (isVirtual === true) MUST
+ *                    use this path; the runner crashes if the check does
+ *                    not declare supportsInMemory.
  *
- * Without Entry you would need magic strings ("path::subkey"), parallel
- * arrays, or ad-hoc parsing scattered across the codebase.
+ * --- ANATOMY ---
  *
- * Entry separates these concerns cleanly:
+ *   entry.id           → "data.json[3]"     shown to the user in output/reports
+ *   entry.path         → "/repo/data.json"  passed to check.lint() / check.fix()
+ *   entry.sourceFile   → "/repo/data.json"  added to git staging after a fix
+ *   entry.metadata     → { index: 3 }       extra context for entry-aware checks
+ *   entry.isVirtual    → false / true       false = whole file, true = slice
+ *   entry.readContent() → string            slice content as a string
+ *   entry.writeBack(s)  → void              splice modified slice back into the file
  *
- *   entry.id         → "data.json[3]"    shown to the user in output/reports
- *   entry.path       → "/repo/data.json" passed to check.lint() / check.fix()
- *   entry.sourceFile → "/repo/data.json" added to git staging after a fix
- *   entry.metadata   → { index: 3 }      extra context for entry-aware checks
- *
- * For a plain FileEntry all four collapse to the same absolute path, so
- * existing checks that do fs.readFile(file) require zero changes.
+ * For a plain FileEntry the path/sourceFile collapse to the same absolute
+ * path and readContent/writeBack default to reading/writing that file, so
+ * existing checks require zero changes.
  *
  * --- SUMMARY ---
  *
  *   Expander  — factory:  file path  →  Entry[]
- *   Entry     — value:    carries id, path, sourceFile and metadata together
+ *   Entry     — value:    carries id/path/metadata AND knows how to read/write its slice
  */
 export class BaseEntry {
   /**
@@ -72,5 +76,38 @@ export class BaseEntry {
    */
   get metadata() {
     return {};
+  }
+
+  /**
+   * Whether this entry is a virtual slice of a larger file (true) or
+   * the whole file (false). Virtual entries can ONLY be processed by
+   * checks that declare supportsInMemory; the runner aborts otherwise.
+   * @returns {boolean}
+   */
+  get isVirtual() {
+    return false;
+  }
+
+  /**
+   * Read this entry's content as a string.
+   * Default: reads the underlying file at this.path. Virtual entries
+   * override this to extract just their slice.
+   * @returns {Promise<string>}
+   */
+  async readContent() {
+    if (!this.path) throw new Error(`Entry ${this.id} has no path and no readContent override`);
+    return fs.readFile(this.path, "utf-8");
+  }
+
+  /**
+   * Write the given content back to disk as this entry's new value.
+   * Default: overwrites this.path with the string verbatim. Virtual
+   * entries override this to splice their slice back into the parent file.
+   * @param {string} content
+   * @returns {Promise<void>}
+   */
+  async writeBack(content) {
+    if (!this.path) throw new Error(`Entry ${this.id} has no path and no writeBack override`);
+    await fs.writeFile(this.path, content, "utf-8");
   }
 }

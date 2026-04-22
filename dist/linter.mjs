@@ -782,7 +782,7 @@ var require_dist2 = __commonJS({
 });
 
 // linter.js
-import fs18 from "fs";
+import fs19 from "fs";
 import path15 from "path";
 import { fileURLToPath } from "url";
 import { spawnSync as spawnSync3, execSync } from "child_process";
@@ -958,11 +958,11 @@ function ensureCleanExit(child) {
 }
 
 // checks/crlf-check.js
-import fs2 from "fs/promises";
+import fs3 from "fs/promises";
 
 // checks/base-check.js
 import path from "path";
-import fs from "fs/promises";
+import fs2 from "fs/promises";
 
 // expanders/base-expander.js
 var BaseExpander = class {
@@ -986,6 +986,7 @@ var BaseExpander = class {
 };
 
 // entries/base-entry.js
+import { promises as fs } from "fs";
 var BaseEntry = class {
   /**
    * Unique identifier for this entry, used in output and reports.
@@ -1020,6 +1021,36 @@ var BaseEntry = class {
    */
   get metadata() {
     return {};
+  }
+  /**
+   * Whether this entry is a virtual slice of a larger file (true) or
+   * the whole file (false). Virtual entries can ONLY be processed by
+   * checks that declare supportsInMemory; the runner aborts otherwise.
+   * @returns {boolean}
+   */
+  get isVirtual() {
+    return false;
+  }
+  /**
+   * Read this entry's content as a string.
+   * Default: reads the underlying file at this.path. Virtual entries
+   * override this to extract just their slice.
+   * @returns {Promise<string>}
+   */
+  async readContent() {
+    if (!this.path) throw new Error(`Entry ${this.id} has no path and no readContent override`);
+    return fs.readFile(this.path, "utf-8");
+  }
+  /**
+   * Write the given content back to disk as this entry's new value.
+   * Default: overwrites this.path with the string verbatim. Virtual
+   * entries override this to splice their slice back into the parent file.
+   * @param {string} content
+   * @returns {Promise<void>}
+   */
+  async writeBack(content) {
+    if (!this.path) throw new Error(`Entry ${this.id} has no path and no writeBack override`);
+    await fs.writeFile(this.path, content, "utf-8");
   }
 };
 
@@ -1131,7 +1162,7 @@ var BaseCheck = class {
     if (this.#textOnly) {
       let fh;
       try {
-        fh = await fs.open(file, "r");
+        fh = await fs2.open(file, "r");
         const buffer = Buffer.alloc(1024);
         const { bytesRead } = await fh.read(buffer, 0, 1024, 0);
         for (let i = 0; i < bytesRead; i++) {
@@ -1160,18 +1191,20 @@ var BaseCheck = class {
    * Lint (read-only check) a single file.
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult>}
    */
-  async lint(file, deps) {
+  async lint(file, deps, entry = null) {
     throw new Error("Not implemented: lint");
   }
   /**
    * Fix (in-place modify) a single file.
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult>}
    */
-  async fix(file, deps) {
+  async fix(file, deps, entry = null) {
     throw new Error("Not implemented: fix");
   }
   /**
@@ -1181,9 +1214,61 @@ var BaseCheck = class {
    * support combined mode — the runner will fall back to fix().
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult | null>}
    */
-  async lintAndFix(file, deps) {
+  async lintAndFix(file, deps, entry = null) {
+    return null;
+  }
+  // ── In-memory (string in / string out) interface ─────────────────────
+  //
+  // Checks that can operate on raw content strings (without doing their own
+  // file I/O) should override the *InMemory methods and set supportsInMemory
+  // to true. The runner always prefers this path when available, so the same
+  // check works for whole files (FileEntry) and for virtual slices
+  // (JsonArrayEntry, etc.) without any per-entry-type code in the check.
+  //
+  // The runner aborts with a clear error if a virtual entry is paired with a
+  // check that does not declare supportsInMemory.
+  // ─────────────────────────────────────────────────────────────────────
+  /**
+   * Whether this check implements the in-memory (*InMemory) interface.
+   * @returns {boolean}
+   */
+  get supportsInMemory() {
+    return false;
+  }
+  /**
+   * Lint a content string. Override when supportsInMemory is true.
+   * @param {string} content - The slice of file content to evaluate.
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry - The entry being processed (for id, sourceFile, metadata).
+   * @returns {Promise<CheckResult>}
+   */
+  async lintInMemory(content, deps, entry) {
+    throw new Error("Not implemented: lintInMemory");
+  }
+  /**
+   * Fix a content string. Override when supportsInMemory is true.
+   * Returns CheckResult plus an optional `content` field with the new string;
+   * the runner pipes that back through entry.writeBack() when status === "fixed".
+   * @param {string} content
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry
+   * @returns {Promise<CheckResult & { content?: string }>}
+   */
+  async fixInMemory(content, deps, entry) {
+    throw new Error("Not implemented: fixInMemory");
+  }
+  /**
+   * Optional combined lint+fix on a content string. Same null-fallback
+   * semantics as lintAndFix(). Returns CheckResult plus optional `content`.
+   * @param {string} content
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry
+   * @returns {Promise<(CheckResult & { content?: string }) | null>}
+   */
+  async lintAndFixInMemory(content, deps, entry) {
     return null;
   }
   /**
@@ -1229,7 +1314,7 @@ var CrlfCheck = class extends BaseCheck {
   }
   async lint(file) {
     try {
-      const content = await fs2.readFile(file);
+      const content = await fs3.readFile(file);
       if (content.includes("\r\n")) {
         return { status: "fail", output: "contains CRLF line endings" };
       }
@@ -1240,10 +1325,10 @@ var CrlfCheck = class extends BaseCheck {
   }
   async fix(file) {
     try {
-      const before = await fs2.readFile(file);
+      const before = await fs3.readFile(file);
       if (before.includes("\r\n")) {
         const fixed = before.toString("utf-8").replace(/\r\n/g, "\n");
-        await fs2.writeFile(file, Buffer.from(fixed, "utf-8"));
+        await fs3.writeFile(file, Buffer.from(fixed, "utf-8"));
         return { status: "fixed" };
       }
       return { status: "pass" };
@@ -1263,15 +1348,15 @@ var CrlfCheck = class extends BaseCheck {
 // checks/linelint-check.js
 import { execFile as execFile2 } from "child_process";
 import { promisify } from "util";
-import { promises as fs5 } from "fs";
+import { promises as fs6 } from "fs";
 
 // tool-resolve/linelint.js
-import fs4 from "fs";
+import fs5 from "fs";
 import path3 from "path";
 import os2 from "os";
 
 // tool-resolve/tool-utils.js
-import fs3 from "fs";
+import fs4 from "fs";
 import path2 from "path";
 import crypto from "crypto";
 import { execFile, spawnSync } from "child_process";
@@ -1283,8 +1368,8 @@ function getToolPaths(toolsDir) {
   };
 }
 function ensureDirExists(dirPath) {
-  if (!fs3.existsSync(dirPath)) {
-    fs3.mkdirSync(dirPath, { recursive: true });
+  if (!fs4.existsSync(dirPath)) {
+    fs4.mkdirSync(dirPath, { recursive: true });
   }
 }
 function checkInPath(exeName) {
@@ -1303,7 +1388,7 @@ function checkInPath(exeName) {
 function verifySha256(filePath, expectedSha256) {
   return new Promise((resolve, reject) => {
     const hash = crypto.createHash("sha256");
-    const stream = fs3.createReadStream(filePath);
+    const stream = fs4.createReadStream(filePath);
     stream.on("data", (chunk) => hash.update(chunk));
     stream.on("error", reject);
     stream.on("end", () => {
@@ -1319,10 +1404,10 @@ function verifySha256(filePath, expectedSha256) {
 async function downloadFile(url, destPath, expectedSha256) {
   const tmpPath = destPath + ".downloading";
   try {
-    fs3.unlinkSync(tmpPath);
+    fs4.unlinkSync(tmpPath);
   } catch {
   }
-  if (fs3.existsSync(destPath)) {
+  if (fs4.existsSync(destPath)) {
     console.log(`Validating cached ${path2.basename(destPath)}...`);
     try {
       await verifySha256(destPath, expectedSha256);
@@ -1330,7 +1415,7 @@ async function downloadFile(url, destPath, expectedSha256) {
     } catch (err) {
       console.warn(`Cached file is corrupted: ${err.message}`);
       console.warn(`Deleting and re-downloading...`);
-      fs3.unlinkSync(destPath);
+      fs4.unlinkSync(destPath);
     }
   }
   console.log(`Downloading ${path2.basename(destPath)} from ${url}...`);
@@ -1342,7 +1427,7 @@ async function downloadFile(url, destPath, expectedSha256) {
       (error, stdout, stderr) => {
         if (error) {
           try {
-            fs3.unlinkSync(tmpPath);
+            fs4.unlinkSync(tmpPath);
           } catch {
           }
           reject(new Error(`Download failed: ${error.message}
@@ -1357,12 +1442,12 @@ ${stderr}`));
     await verifySha256(tmpPath, expectedSha256);
   } catch (err) {
     try {
-      fs3.unlinkSync(tmpPath);
+      fs4.unlinkSync(tmpPath);
     } catch {
     }
     throw err;
   }
-  fs3.renameSync(tmpPath, destPath);
+  fs4.renameSync(tmpPath, destPath);
 }
 function extractArchive(archivePath, destDir, members = []) {
   return new Promise((resolve, reject) => {
@@ -1423,9 +1508,9 @@ async function getLinelintPath({ shouldDownload, shouldSearchInPath, toolsDir })
   const destPath = path3.join(CACHE_PATH, exeName);
   await downloadFile(url, destPath, exeSha256);
   if (platform !== "win32") {
-    fs4.chmodSync(destPath, 493);
+    fs5.chmodSync(destPath, 493);
   }
-  if (fs4.existsSync(destPath)) {
+  if (fs5.existsSync(destPath)) {
     console.log(`Using ${destPath}`);
     return destPath;
   }
@@ -1464,7 +1549,7 @@ var LinelintCheck = class extends BaseCheck {
   async fix(file, deps) {
     let before;
     try {
-      before = await fs5.readFile(file);
+      before = await fs6.readFile(file);
     } catch (err) {
       return { status: "error", output: err.message };
     }
@@ -1478,7 +1563,7 @@ var LinelintCheck = class extends BaseCheck {
       return { status: "error", output: out || "linelint fix failed" };
     }
     try {
-      const after = await fs5.readFile(file);
+      const after = await fs6.readFile(file);
       if (!before.equals(after)) {
         return { status: "fixed" };
       }
@@ -1497,12 +1582,12 @@ var LinelintCheck = class extends BaseCheck {
 };
 
 // checks/clang-format-check.js
-import { promises as fs7 } from "fs";
+import { promises as fs8 } from "fs";
 import { execFile as execFile3 } from "child_process";
 import { promisify as promisify2 } from "util";
 
 // tool-resolve/clang-format.js
-import fs6 from "fs";
+import fs7 from "fs";
 import path4 from "path";
 import os3 from "os";
 import { spawnSync as spawnSync2 } from "child_process";
@@ -1560,7 +1645,7 @@ async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir
   const archivePath = path4.join(CACHE_PATH, archiveName);
   const extractDir = path4.join(EXTRACTED_PATH, `llvm-${VERSION2}`);
   const expectedExe = path4.join(extractDir, archivePathToClangFormat);
-  if (fs6.existsSync(expectedExe)) {
+  if (fs7.existsSync(expectedExe)) {
     console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
     return expectedExe;
   }
@@ -1568,7 +1653,7 @@ async function getClangFormatPath({ shouldDownload, shouldSearchInPath, toolsDir
   ensureDirExists(extractDir);
   console.log(`Extracting clang-format from ${archiveName} (single binary, not full LLVM)...`);
   await extractArchive(archivePath, extractDir, [archivePathToClangFormat]);
-  if (fs6.existsSync(expectedExe)) {
+  if (fs7.existsSync(expectedExe)) {
     console.log(`Using downloaded ${expectedExe}, version ${checkVersion(expectedExe)}`);
     return expectedExe;
   }
@@ -1607,7 +1692,7 @@ var ClangFormatCheck = class extends BaseCheck {
   async fix(file, deps) {
     let before;
     try {
-      before = await fs7.readFile(file);
+      before = await fs8.readFile(file);
     } catch (err) {
       return { status: "error", output: err.message };
     }
@@ -1621,7 +1706,7 @@ var ClangFormatCheck = class extends BaseCheck {
       return { status: "error", output };
     }
     try {
-      const after = await fs7.readFile(file);
+      const after = await fs8.readFile(file);
       if (!before.equals(after)) {
         return { status: "fixed" };
       }
@@ -1640,7 +1725,7 @@ var ClangFormatCheck = class extends BaseCheck {
 };
 
 // checks/paired-files-check.js
-import { promises as fs8 } from "fs";
+import { promises as fs9 } from "fs";
 import path5 from "path";
 var PairedFilesCheck = class extends BaseCheck {
   #absDirs;
@@ -1679,7 +1764,7 @@ var PairedFilesCheck = class extends BaseCheck {
     const pairDir = this.#absDirs.find((d) => d !== ownDir);
     let pairFiles;
     try {
-      pairFiles = await fs8.readdir(pairDir.abs);
+      pairFiles = await fs9.readdir(pairDir.abs);
     } catch (err) {
       return { status: "error", output: `cannot read pair directory ${pairDir.abs}: ${err.message}` };
     }
@@ -1701,7 +1786,7 @@ var PairedFilesCheck = class extends BaseCheck {
     const pairPath = path5.join(pairDir.abs, expected);
     let pairFiles;
     try {
-      pairFiles = await fs8.readdir(pairDir.abs);
+      pairFiles = await fs9.readdir(pairDir.abs);
     } catch (err) {
       return { status: "error", output: `cannot read pair directory ${pairDir.abs}: ${err.message}` };
     }
@@ -1716,7 +1801,7 @@ var PairedFilesCheck = class extends BaseCheck {
     }
     const content = this.resolveTemplate(pairDir.template, { file });
     try {
-      await fs8.writeFile(pairPath, content);
+      await fs9.writeFile(pairPath, content);
     } catch (err) {
       return { status: "error", output: `failed to create ${pairPath}: ${err.message}` };
     }
@@ -1732,7 +1817,7 @@ var PairedFilesCheck = class extends BaseCheck {
 };
 
 // checks/codegen-check.js
-import { promises as fs9 } from "fs";
+import { promises as fs10 } from "fs";
 import { execFile as execFile4 } from "child_process";
 import { promisify as promisify3 } from "util";
 import path6 from "path";
@@ -1767,7 +1852,7 @@ var CodegenCheck = class extends BaseCheck {
   async lint(file, _deps) {
     let original;
     try {
-      original = await fs9.readFile(this.#absOutput);
+      original = await fs10.readFile(this.#absOutput);
     } catch (err) {
       if (err.code === "ENOENT") {
         original = null;
@@ -1783,7 +1868,7 @@ var CodegenCheck = class extends BaseCheck {
     }
     let generated;
     try {
-      generated = await fs9.readFile(this.#absOutput);
+      generated = await fs10.readFile(this.#absOutput);
     } catch (err) {
       await this.#restore(original);
       return { status: "error", output: `cannot read generated output: ${err.message}` };
@@ -1814,11 +1899,11 @@ var CodegenCheck = class extends BaseCheck {
   async #restore(original) {
     if (original === null) {
       try {
-        await fs9.unlink(this.#absOutput);
+        await fs10.unlink(this.#absOutput);
       } catch {
       }
     } else {
-      await fs9.writeFile(this.#absOutput, original);
+      await fs10.writeFile(this.#absOutput, original);
     }
   }
   static getHelp() {
@@ -1831,7 +1916,6 @@ var CodegenCheck = class extends BaseCheck {
 };
 
 // checks/ai-prompt-check.js
-import { promises as fs11 } from "fs";
 import path8 from "path";
 
 // ai-providers/claude.js
@@ -2025,7 +2109,7 @@ var GeminiProvider = class extends BaseAiProvider {
 };
 
 // checks/check-utils.js
-import { promises as fs10 } from "fs";
+import { promises as fs11 } from "fs";
 import path7 from "path";
 import { createHash } from "crypto";
 var LOCKFILE_NAME = ".ai-prompt-lock.json";
@@ -2055,7 +2139,7 @@ var buildFileContext = async (absPaths, repoRoot) => {
     }
     let content;
     try {
-      content = await fs10.readFile(absPath, "utf-8");
+      content = await fs11.readFile(absPath, "utf-8");
     } catch (err) {
       return { error: `cannot read context file ${rel}: ${err.message}` };
     }
@@ -2068,36 +2152,27 @@ ${content}
 var lockfilePath = (repoRoot) => path7.join(repoRoot, LOCKFILE_NAME);
 var readLockfile = async (repoRoot) => {
   try {
-    return JSON.parse(await fs10.readFile(lockfilePath(repoRoot), "utf-8"));
+    return JSON.parse(await fs11.readFile(lockfilePath(repoRoot), "utf-8"));
   } catch {
     return {};
   }
 };
-var getFileHash = async (file) => {
-  const raw = await fs10.readFile(path7.resolve(file), "utf-8");
-  const normalized = raw.replace(/\r\n?/g, "\n");
-  return createHash("sha256").update(normalized).digest("hex");
-};
-var lockMatches = async (checkName, relFile, absFile, repoRoot) => {
+var getStringHash = (str) => createHash("sha256").update(str).digest("hex");
+var lockMatchesContent = async (checkName, key, content, repoRoot) => {
   const lock = await readLockfile(repoRoot);
-  const entry = lock[checkName]?.[relFile];
+  const entry = lock[checkName]?.[key];
   if (entry == null) return false;
   if (entry === 1) return true;
   if (typeof entry !== "string") return false;
-  try {
-    const hash = await getFileHash(absFile);
-    return hash === entry;
-  } catch {
-    return false;
-  }
+  return getStringHash(content) === entry;
 };
-var lockWrite = async (checkName, relFile, absFile, repoRoot, opts = {}) => {
+var lockWriteContent = async (checkName, key, content, repoRoot, opts = {}) => {
   const lp = lockfilePath(repoRoot);
   const lock = await readLockfile(repoRoot);
   if (!lock[checkName]) lock[checkName] = {};
   const writeUniversal = opts.lockValue === 1 || opts.lockValue === "1";
-  lock[checkName][relFile] = writeUniversal ? 1 : await getFileHash(absFile);
-  await fs10.writeFile(lp, JSON.stringify(lock, null, 2) + "\n", "utf-8");
+  lock[checkName][key] = writeUniversal ? 1 : getStringHash(content);
+  await fs11.writeFile(lp, JSON.stringify(lock, null, 2) + "\n", "utf-8");
 };
 
 // checks/ai-prompt-check.js
@@ -2139,171 +2214,181 @@ var AiPromptCheck = class extends BaseCheck {
   getTemplates() {
     return standardTemplates();
   }
-  async lint(file, _deps) {
-    const relFile = path8.relative(this.repoRoot, file);
+  get supportsInMemory() {
+    return true;
+  }
+  async lintInMemory(content, _deps, entry) {
     const instruction = this.#lintPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for lint (set lintPrompt)" };
     }
-    const promptFiles = dedupePaths([file, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-    const context = await buildFileContext(promptFiles, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-    if (this.#lock && await lockMatches(this.name, relFile, file, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
-    const prompt = `You are a code review assistant integrated into a linter.
-Primary file: ${relFile}
-Instruction: ${instruction}
-
-${context.value}
-
-Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
+    const prompt = this.#buildLintPrompt(entry, instruction, content, ctx.value);
+    const verdict = await this.#callAndParse(prompt);
+    if (verdict.error) return { status: "error", output: verdict.error };
+    const lockPath = lockfilePath(this.repoRoot);
+    if (verdict.value.pass) {
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
+      return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
-    let verdict;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      verdict = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
-    }
-    if (verdict.pass) {
-      if (this.#lock) await lockWrite(this.name, relFile, file, this.repoRoot, { lockValue: this.#lockValue });
-      return { status: "pass" };
-    }
-    return { status: "fail", output: verdict.reason || "AI check failed (no reason provided)" };
+    return { status: "fail", output: verdict.value.reason || "AI check failed (no reason provided)" };
   }
-  async fix(file, _deps) {
-    const relFile = path8.relative(this.repoRoot, file);
+  async fixInMemory(content, _deps, entry) {
     const instruction = this.#fixPrompt;
     if (!instruction) {
       return { status: "error", output: "No prompt configured for fix (set fixPrompt)" };
     }
-    const absFile = path8.resolve(file);
-    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-    const context = await buildFileContext(filesToRead, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
-    const prompt = `You are a code fixing assistant integrated into a linter.
-File to fix: ${relFile}
-Instruction: ${instruction}
-
-${context.value}
-
-Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation", "content": "full new file content" }. If no changes are needed, set changed to false and omit content.`;
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
-    }
-    let result;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
-    }
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
+    const prompt = this.#buildFixPrompt(entry, instruction, content, ctx.value);
+    const parsed = await this.#callAndParse(prompt);
+    if (parsed.error) return { status: "error", output: parsed.error };
+    const result = parsed.value;
     const lockPath = lockfilePath(this.repoRoot);
     if (!result.changed || typeof result.content !== "string") {
-      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
-    let current;
-    try {
-      current = await fs11.readFile(absFile, "utf-8");
-    } catch (err) {
-      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+    if (result.content === content) {
+      return { status: "pass", output: result.reason || "AI reported changes but content was identical" };
     }
-    if (current === result.content) {
-      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
-    }
-    await fs11.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
-    return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
+    if (this.#lock) await lockWriteContent(this.name, lockKey, result.content, this.repoRoot, { lockValue: this.#lockValue });
+    return {
+      status: "fixed",
+      output: result.reason || "AI applied fixes",
+      content: result.content,
+      ...this.#lock && { extraFiles: [lockPath] }
+    };
   }
-  /**
-   * Combined lint + fix in a single AI call.
-   * When both lintPrompt and fixPrompt are configured, evaluates the file
-   * against lint criteria and applies the fix if needed — one round-trip.
-   * Returns null when combined mode is not available (only one prompt set).
-   */
-  async lintAndFix(file, _deps) {
+  async lintAndFixInMemory(content, _deps, entry) {
     if (!this.#lintPrompt || !this.#fixPrompt) return null;
-    const relFile = path8.relative(this.repoRoot, file);
-    const absFile = path8.resolve(file);
-    const filesToRead = dedupePaths([absFile, ...resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot)]);
-    const context = await buildFileContext(filesToRead, this.repoRoot);
-    if (context.error) {
-      return { status: "error", output: context.error };
-    }
-    if (this.#lock && await lockMatches(this.name, relFile, absFile, this.repoRoot)) {
+    const lockKey = this.#lockKey(entry);
+    if (this.#lock && await lockMatchesContent(this.name, lockKey, content, this.repoRoot)) {
       return { status: "pass" };
     }
-    const prompt = `You are a code review and fixing assistant integrated into a linter.
-File: ${relFile}
-
-Lint criteria: ${this.#lintPrompt}
-Fix instruction: ${this.#fixPrompt}
-
-${context.value}
-
-First evaluate the file against the lint criteria.
-If the file PASSES, respond with ONLY a JSON object (no markdown fences):
-{ "pass": true, "reason": "short explanation" }
-
-If the file FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):
-{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected file content" }
-If the file fails but cannot be fixed, set pass to false and omit content.`;
-    let reply;
-    try {
-      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
-    } catch (err) {
-      return { status: "error", output: `${this.#provider.name} error: ${err.message}` };
-    }
-    let result;
-    try {
-      const jsonMatch = reply.match(/\{[\s\S]*\}/);
-      result = JSON.parse(jsonMatch ? jsonMatch[0] : reply);
-    } catch {
-      return { status: "error", output: `${this.#provider.name} returned invalid JSON: ${reply}` };
-    }
+    const ctx = await this.#buildExtraContext(entry);
+    if (ctx.error) return { status: "error", output: ctx.error };
+    const prompt = this.#buildLintAndFixPrompt(entry, content, ctx.value);
+    const parsed = await this.#callAndParse(prompt);
+    if (parsed.error) return { status: "error", output: parsed.error };
+    const result = parsed.value;
     const lockPath = lockfilePath(this.repoRoot);
     if (result.pass) {
-      if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
+      if (this.#lock) await lockWriteContent(this.name, lockKey, content, this.repoRoot, { lockValue: this.#lockValue });
       return { status: "pass", ...this.#lock && { extraFiles: [lockPath] } };
     }
     if (typeof result.content !== "string") {
       return { status: "fail", output: result.reason || "AI check failed and could not produce a fix" };
     }
-    let current;
+    if (result.content === content) {
+      return { status: "pass", output: result.reason || "AI reported changes but content was identical" };
+    }
+    if (this.#lock) await lockWriteContent(this.name, lockKey, result.content, this.repoRoot, { lockValue: this.#lockValue });
+    return {
+      status: "fixed",
+      output: result.reason || "AI applied fixes",
+      content: result.content,
+      ...this.#lock && { extraFiles: [lockPath] }
+    };
+  }
+  // ── prompt builders ──────────────────────────────────────────────────
+  #buildLintPrompt(entry, instruction, content, extraContext) {
+    return `You are a code review assistant integrated into a linter.
+Item: ${this.#entryLabel(entry)}
+Instruction: ${instruction}
+
+Content to review:
+${content}` + (extraContext ? `
+
+${extraContext}` : "") + `
+
+Respond with ONLY a JSON object (no markdown fences): { "pass": true/false, "reason": "short explanation" }`;
+  }
+  #buildFixPrompt(entry, instruction, content, extraContext) {
+    return `You are a code fixing assistant integrated into a linter.
+Item to fix: ${this.#entryLabel(entry)}
+Instruction: ${instruction}
+
+Content to fix:
+${content}` + (extraContext ? `
+
+${extraContext}` : "") + `
+
+Respond with ONLY a JSON object (no markdown fences): { "changed": true/false, "reason": "short explanation", "content": "full new content as a string" }. The "content" field, when present, must be the entire replacement content as a single string (use the same format as the input \u2014 if it is JSON text, return JSON text). If no changes are needed, set changed to false and omit content.`;
+  }
+  #buildLintAndFixPrompt(entry, content, extraContext) {
+    return `You are a code review and fixing assistant integrated into a linter.
+Item: ${this.#entryLabel(entry)}
+
+Lint criteria: ${this.#lintPrompt}
+Fix instruction: ${this.#fixPrompt}
+
+Content:
+${content}` + (extraContext ? `
+
+${extraContext}` : "") + `
+
+First evaluate the content against the lint criteria.
+If it PASSES, respond with ONLY a JSON object (no markdown fences):
+{ "pass": true, "reason": "short explanation" }
+
+If it FAILS, apply the fix instruction and respond with ONLY a JSON object (no markdown fences):
+{ "pass": false, "reason": "short explanation of what was wrong", "content": "full corrected content as a string" }
+The "content" field must be the entire replacement content as a single string (use the same format as the input \u2014 if it is JSON text, return JSON text).
+If it fails but cannot be fixed, set pass to false and omit content.`;
+  }
+  // ── helpers ──────────────────────────────────────────────────────────
+  #entryLabel(entry) {
+    if (!entry) return "(unknown)";
+    if (entry.sourceFile) {
+      const rel = path8.relative(this.repoRoot, entry.sourceFile);
+      const id = entry.id;
+      return id && id !== entry.sourceFile ? `${rel} (${path8.basename(id)})` : rel;
+    }
+    return entry.id || "(unknown)";
+  }
+  #lockKey(entry) {
+    if (!entry?.sourceFile) return entry?.id ?? "(unknown)";
+    const rel = path8.relative(this.repoRoot, entry.sourceFile);
+    if (!entry.isVirtual || !entry.id) return rel;
+    const suffix = entry.id.startsWith(entry.sourceFile) ? entry.id.slice(entry.sourceFile.length) : `:${entry.id}`;
+    return rel + suffix;
+  }
+  async #buildExtraContext(entry) {
+    if (this.#filesToRead.length === 0) return { value: "" };
+    const file = entry?.sourceFile ?? null;
+    const extra = resolvePaths(this.#filesToRead, file, this.resolveTemplate.bind(this), this.repoRoot);
+    if (extra.length === 0) return { value: "" };
+    return buildFileContext(dedupePaths(extra), this.repoRoot);
+  }
+  async #callAndParse(prompt) {
+    let reply;
     try {
-      current = await fs11.readFile(absFile, "utf-8");
+      reply = await this.#provider.call(prompt, { cwd: this.repoRoot });
     } catch (err) {
-      return { status: "error", output: `cannot read file before applying AI fix: ${err.message}` };
+      return { error: `${this.#provider.name} error: ${err.message}` };
     }
-    if (current === result.content) {
-      return { status: "pass", output: result.reason || "AI reported changes but file content was identical" };
+    try {
+      const jsonMatch = reply.match(/\{[\s\S]*\}/);
+      return { value: JSON.parse(jsonMatch ? jsonMatch[0] : reply) };
+    } catch {
+      return { error: `${this.#provider.name} returned invalid JSON: ${reply}` };
     }
-    await fs11.writeFile(absFile, result.content, "utf-8");
-    if (this.#lock) await lockWrite(this.name, relFile, absFile, this.repoRoot, { lockValue: this.#lockValue });
-    return { status: "fixed", output: result.reason || "AI applied fixes", ...this.#lock && { extraFiles: [lockPath] } };
   }
   static getHelp() {
     return {
       name: "AiPromptCheck",
-      description: "Invokes an AI CLI (Claude or Gemini) with a user-defined prompt. Lint asks the AI to evaluate pass/fail. Fix asks the AI for updated file content and applies it.",
-      options: "aiProvider \u2014 which AI provider to use: 'claude' (default) or 'gemini'; lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates); lock \u2014 cache AI results per file in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of file hashes"
+      description: "Invokes an AI provider with a user-defined prompt. Pure string-in / string-out: operates on whatever content the entry hands it (whole file via FileEntry, or a virtual slice via JsonArrayExpander, etc.). The entry is responsible for slicing and splicing; the check stays oblivious.",
+      options: "aiProvider \u2014 which AI provider to use: 'claude' (default) or 'gemini'; lintPrompt \u2014 lint-specific instruction (string or array); fixPrompt \u2014 fix-specific instruction (string or array); filesToRead \u2014 additional context files (array of paths, supports {name_without_ext}/{name_with_ext}/{ext}/{dir} templates); lock \u2014 cache AI verdicts per entry in .ai-prompt-lock.json (boolean, default false); lockValue \u2014 optional write mode, set to 1 to store universal lock entries instead of hashes"
     };
   }
 };
@@ -7458,9 +7543,10 @@ var DiffBaseSource = class extends BaseFileSource {
 };
 
 // expanders/json-array-expander.js
-import fs17 from "fs/promises";
+import fs18 from "fs/promises";
 
 // entries/json-array-entry.js
+import { promises as fs17 } from "fs";
 var JsonArrayEntry = class extends BaseEntry {
   #filePath;
   #index;
@@ -7480,12 +7566,38 @@ var JsonArrayEntry = class extends BaseEntry {
   get metadata() {
     return { index: this.#index, element: this.#element };
   }
+  get isVirtual() {
+    return true;
+  }
+  async readContent() {
+    const text = await fs17.readFile(this.#filePath, "utf-8");
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`File ${this.#filePath} is no longer a JSON array`);
+    }
+    return JSON.stringify(parsed[this.#index], null, 2);
+  }
+  async writeBack(content) {
+    const text = await fs17.readFile(this.#filePath, "utf-8");
+    const parsed = JSON.parse(text);
+    if (!Array.isArray(parsed)) {
+      throw new Error(`File ${this.#filePath} is no longer a JSON array`);
+    }
+    let newElement;
+    try {
+      newElement = JSON.parse(content);
+    } catch (err) {
+      throw new Error(`writeBack content is not valid JSON for ${this.id}: ${err.message}`);
+    }
+    parsed[this.#index] = newElement;
+    await fs17.writeFile(this.#filePath, JSON.stringify(parsed, null, 2) + "\n", "utf-8");
+  }
 };
 
 // expanders/json-array-expander.js
 var JsonArrayExpander = class extends BaseExpander {
   async expand(file) {
-    const text = await fs17.readFile(file, "utf8");
+    const text = await fs18.readFile(file, "utf8");
     const parsed = JSON.parse(text);
     if (!Array.isArray(parsed)) return [];
     return parsed.map((element, index) => new JsonArrayEntry(file, index, element));
@@ -7531,7 +7643,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path15.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "22e1be6" : "unknown";
+var LINTER_COMMIT = true ? "6a91e18" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
@@ -7557,7 +7669,7 @@ var resolveClass = async (entry) => {
 };
 var loadConfig = async (mode) => {
   const configPath = path15.join(REPO_ROOT, "linter-config.json");
-  const config = JSON.parse(await fs18.promises.readFile(configPath, "utf-8"));
+  const config = JSON.parse(await fs19.promises.readFile(configPath, "utf-8"));
   const toolsDir = config.toolsDir ? path15.resolve(REPO_ROOT, config.toolsDir) : path15.join(REPO_ROOT, "tools");
   const modeConfig = config.modes[mode];
   if (!modeConfig) {
@@ -7653,6 +7765,34 @@ var formatFileResults = (results, file) => {
   }
   return { lines, isFail, stats };
 };
+var assertEntrySupported = (check, entry) => {
+  if (entry.isVirtual && !check.supportsInMemory) {
+    throw new Error(
+      `Check "${check.name}" does not support in-memory entries (supportsInMemory === false), but its expander produced a virtual entry "${entry.id}". Either use a check that implements the *InMemory interface, or drop the expander for this check.`
+    );
+  }
+};
+var runEntryLint = async (check, entry, fallbackFile, deps) => {
+  assertEntrySupported(check, entry);
+  if (check.supportsInMemory) {
+    const content = await entry.readContent();
+    return check.lintInMemory(content, deps, entry);
+  }
+  return check.lint(entry.path ?? fallbackFile, deps, entry);
+};
+var runEntryFix = async (check, entry, fallbackFile, deps) => {
+  assertEntrySupported(check, entry);
+  if (check.supportsInMemory) {
+    const content = await entry.readContent();
+    const res = typeof check.lintAndFixInMemory === "function" && await check.lintAndFixInMemory(content, deps, entry) || await check.fixInMemory(content, deps, entry);
+    if (res && res.status === "fixed" && typeof res.content === "string") {
+      await entry.writeBack(res.content);
+    }
+    return res;
+  }
+  const entryPath = entry.path ?? fallbackFile;
+  return typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps, entry) || check.fix(entryPath, deps, entry);
+};
 var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...deps }) => {
   const extraFiles = /* @__PURE__ */ new Set();
   const failedPairs = [];
@@ -7694,7 +7834,7 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
               const entries = await check.expand(file);
               return Promise.all(entries.map(async (entry) => {
                 try {
-                  const res = await check.lint(entry.path ?? file, deps);
+                  const res = await runEntryLint(check, entry, file, deps);
                   return { res, checkName: check.name, entryId: entry.id };
                 } catch (err) {
                   return { res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id };
@@ -7739,9 +7879,8 @@ var runChecks = async (files, checks, { lintOnly = false, verbose = false, ...de
       for (const check of checks2) {
         const entries = await check.expand(file);
         for (const entry of entries) {
-          const entryPath = entry.path ?? file;
           try {
-            const res = typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps) || await check.fix(entryPath, deps);
+            const res = await runEntryFix(check, entry, file, deps);
             if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
             fileResults.push({ res, checkName: check.name, entryId: entry.id });
           } catch (err) {
@@ -7804,13 +7943,13 @@ var installHook = () => {
   const hookContent = `#!/bin/sh
 node "${relLinterPath}" --fix --mode hook
 `;
-  if (fs18.existsSync(hookPath)) {
+  if (fs19.existsSync(hookPath)) {
     const backup = hookPath + ".bak";
-    fs18.copyFileSync(hookPath, backup);
+    fs19.copyFileSync(hookPath, backup);
     console.log(`Existing pre-commit hook backed up to ${path15.basename(backup)}`);
   }
-  fs18.mkdirSync(hooksDir, { recursive: true });
-  fs18.writeFileSync(hookPath, hookContent, { mode: 493 });
+  fs19.mkdirSync(hooksDir, { recursive: true });
+  fs19.writeFileSync(hookPath, hookContent, { mode: 493 });
   console.log(`Installed pre-commit hook at ${path15.relative(REPO_ROOT, hookPath)}`);
 };
 var detectInstallMethod = () => {
@@ -7871,20 +8010,20 @@ var upgrade = () => {
         );
       } catch {
         try {
-          fs18.unlinkSync(tmpPath);
+          fs19.unlinkSync(tmpPath);
         } catch {
         }
         console.error("Download failed.");
         process.exit(1);
       }
-      const head = fs18.readFileSync(tmpPath, "utf-8").slice(0, 100);
+      const head = fs19.readFileSync(tmpPath, "utf-8").slice(0, 100);
       if (!head.startsWith("#!/")) {
-        fs18.unlinkSync(tmpPath);
+        fs19.unlinkSync(tmpPath);
         console.error("Downloaded file does not look like a valid linter bundle. Aborting.");
         process.exit(1);
       }
-      fs18.renameSync(tmpPath, __filename);
-      fs18.chmodSync(__filename, 493);
+      fs19.renameSync(tmpPath, __filename);
+      fs19.chmodSync(__filename, 493);
       console.log(`Updated ${__filename}`);
       try {
         execSync(`node "${__filename}" --version`, { stdio: "inherit" });
@@ -7962,7 +8101,7 @@ var printHelp = () => {
 };
 var initConfig = () => {
   const configPath = path15.join(REPO_ROOT, "linter-config.json");
-  if (fs18.existsSync(configPath)) {
+  if (fs19.existsSync(configPath)) {
     console.error(`linter-config.json already exists at ${configPath}`);
     process.exit(1);
   }
@@ -7981,7 +8120,7 @@ var initConfig = () => {
     },
     checks: checkEntries
   };
-  fs18.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
+  fs19.writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n");
   console.log(`Created ${path15.relative(REPO_ROOT, configPath)}`);
 };
 var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
@@ -8173,7 +8312,7 @@ var buildPrd = (failedPairs, prdConfig, checkEntries, baseCommand) => {
       const baseCommand = relScript.startsWith("..") ? `node ${process.argv[1]}` : `node ${relScript}`;
       const prd = buildPrd(runResult.failedPairs || [], prdConfig, checkEntries, baseCommand);
       const absOutputPrdPath = path15.isAbsolute(outputPrdPath) ? outputPrdPath : path15.resolve(process.cwd(), outputPrdPath);
-      fs18.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
+      fs19.writeFileSync(absOutputPrdPath, JSON.stringify(prd, null, 2) + "\n");
       console.log(`PRD written to ${absOutputPrdPath}`);
     }
     if (files.length === 0) {

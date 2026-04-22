@@ -183,6 +183,56 @@ const formatFileResults = (results, file) => {
 };
 
 /**
+ * Refuse virtual entries against checks that don't speak the in-memory contract.
+ * A virtual entry (e.g. one element of a JSON array) cannot be processed by a
+ * check that does its own raw file I/O — that would corrupt the surrounding file.
+ */
+const assertEntrySupported = (check, entry) => {
+  if (entry.isVirtual && !check.supportsInMemory) {
+    throw new Error(
+      `Check "${check.name}" does not support in-memory entries (supportsInMemory === false), ` +
+      `but its expander produced a virtual entry "${entry.id}". ` +
+      `Either use a check that implements the *InMemory interface, or drop the expander for this check.`
+    );
+  }
+};
+
+/**
+ * Run a single (check, entry) pair in lint-only mode.
+ * Routes to lintInMemory when the check supports it; otherwise falls back to file-based lint.
+ */
+const runEntryLint = async (check, entry, fallbackFile, deps) => {
+  assertEntrySupported(check, entry);
+  if (check.supportsInMemory) {
+    const content = await entry.readContent();
+    return check.lintInMemory(content, deps, entry);
+  }
+  return check.lint(entry.path ?? fallbackFile, deps, entry);
+};
+
+/**
+ * Run a single (check, entry) pair in fix mode.
+ * Routes to lintAndFixInMemory/fixInMemory when supported, writing the result back via entry.writeBack.
+ * Otherwise falls back to file-based lintAndFix/fix.
+ */
+const runEntryFix = async (check, entry, fallbackFile, deps) => {
+  assertEntrySupported(check, entry);
+  if (check.supportsInMemory) {
+    const content = await entry.readContent();
+    const res =
+      (typeof check.lintAndFixInMemory === "function" && await check.lintAndFixInMemory(content, deps, entry)) ||
+      await check.fixInMemory(content, deps, entry);
+    if (res && res.status === "fixed" && typeof res.content === "string") {
+      await entry.writeBack(res.content);
+    }
+    return res;
+  }
+  const entryPath = entry.path ?? fallbackFile;
+  return (typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps, entry)) ||
+    check.fix(entryPath, deps, entry);
+};
+
+/**
  * Core: Run checks (lint or fix) on given files.
  *
  * Lint mode:  all (check, file) pairs run in parallel.
@@ -243,7 +293,7 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
               const entries = await check.expand(file);
               return Promise.all(entries.map(async (entry) => {
                 try {
-                  const res = await check.lint(entry.path ?? file, deps);
+                  const res = await runEntryLint(check, entry, file, deps);
                   return { res, checkName: check.name, entryId: entry.id };
                 } catch (err) {
                   return { res: { status: "error", output: err.message }, checkName: check.name, entryId: entry.id };
@@ -292,9 +342,8 @@ const runChecks = async (files, checks, { lintOnly = false, verbose = false, ...
       for (const check of checks) {
         const entries = await check.expand(file);
         for (const entry of entries) {
-          const entryPath = entry.path ?? file;
           try {
-            const res = (typeof check.lintAndFix === "function" && await check.lintAndFix(entryPath, deps)) || await check.fix(entryPath, deps);
+            const res = await runEntryFix(check, entry, file, deps);
             if (res.extraFiles) res.extraFiles.forEach((f) => extraFiles.add(f));
             fileResults.push({ res, checkName: check.name, entryId: entry.id });
           } catch (err) {

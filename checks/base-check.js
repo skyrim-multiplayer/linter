@@ -153,9 +153,10 @@ export class BaseCheck {
    * Lint (read-only check) a single file.
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult>}
    */
-  async lint(file, deps) {
+  async lint(file, deps, entry = null) {
     throw new Error("Not implemented: lint");
   }
 
@@ -163,9 +164,10 @@ export class BaseCheck {
    * Fix (in-place modify) a single file.
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult>}
    */
-  async fix(file, deps) {
+  async fix(file, deps, entry = null) {
     throw new Error("Not implemented: fix");
   }
 
@@ -176,9 +178,66 @@ export class BaseCheck {
    * support combined mode — the runner will fall back to fix().
    * @param {string} file - Absolute path.
    * @param {object} deps - Resolved dependencies.
+   * @param {import("../entries/base-entry.js").BaseEntry} [entry] - The entry being processed; provides metadata for sub-file checks.
    * @returns {Promise<CheckResult | null>}
    */
-  async lintAndFix(file, deps) {
+  async lintAndFix(file, deps, entry = null) {
+    return null;
+  }
+
+  // ── In-memory (string in / string out) interface ─────────────────────
+  //
+  // Checks that can operate on raw content strings (without doing their own
+  // file I/O) should override the *InMemory methods and set supportsInMemory
+  // to true. The runner always prefers this path when available, so the same
+  // check works for whole files (FileEntry) and for virtual slices
+  // (JsonArrayEntry, etc.) without any per-entry-type code in the check.
+  //
+  // The runner aborts with a clear error if a virtual entry is paired with a
+  // check that does not declare supportsInMemory.
+  // ─────────────────────────────────────────────────────────────────────
+
+  /**
+   * Whether this check implements the in-memory (*InMemory) interface.
+   * @returns {boolean}
+   */
+  get supportsInMemory() {
+    return false;
+  }
+
+  /**
+   * Lint a content string. Override when supportsInMemory is true.
+   * @param {string} content - The slice of file content to evaluate.
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry - The entry being processed (for id, sourceFile, metadata).
+   * @returns {Promise<CheckResult>}
+   */
+  async lintInMemory(content, deps, entry) {
+    throw new Error("Not implemented: lintInMemory");
+  }
+
+  /**
+   * Fix a content string. Override when supportsInMemory is true.
+   * Returns CheckResult plus an optional `content` field with the new string;
+   * the runner pipes that back through entry.writeBack() when status === "fixed".
+   * @param {string} content
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry
+   * @returns {Promise<CheckResult & { content?: string }>}
+   */
+  async fixInMemory(content, deps, entry) {
+    throw new Error("Not implemented: fixInMemory");
+  }
+
+  /**
+   * Optional combined lint+fix on a content string. Same null-fallback
+   * semantics as lintAndFix(). Returns CheckResult plus optional `content`.
+   * @param {string} content
+   * @param {object} deps
+   * @param {import("../entries/base-entry.js").BaseEntry} entry
+   * @returns {Promise<(CheckResult & { content?: string }) | null>}
+   */
+  async lintAndFixInMemory(content, deps, entry) {
     return null;
   }
 
