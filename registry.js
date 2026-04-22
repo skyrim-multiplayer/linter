@@ -25,6 +25,7 @@ import { DiffBaseSource } from "./file-sources/diff-base-source.js";
 
 // --- expanders ---
 import { FileExpander } from "./expanders/file-expander.js";
+import { JsonArrayExpander } from "./expanders/json-array-expander.js";
 
 export const builtinChecks = {
   CrlfCheck,
@@ -48,6 +49,7 @@ export const builtinFileSources = {
 
 export const builtinExpanders = {
   FileExpander,
+  JsonArrayExpander,
 };
 
 export const builtinRegistry = {
