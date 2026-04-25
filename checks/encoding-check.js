@@ -2,7 +2,7 @@ import fs from "fs/promises";
 import iconv from "iconv-lite";
 import { BaseCheck } from "./base-check.js";
 
-const SUPPORTED = new Set(["utf-8", "cp1251"]);
+const SUPPORTED = new Set(["utf-8", "cp1251", "ascii"]);
 
 const UTF8_BOM = Buffer.from([0xef, 0xbb, 0xbf]);
 const UTF16_LE_BOM = Buffer.from([0xff, 0xfe]);
@@ -41,6 +41,7 @@ function normalizeEncoding(name) {
   const k = name.toLowerCase().replace(/_/g, "-");
   if (k === "utf8" || k === "utf-8") return "utf-8";
   if (k === "cp1251" || k === "windows-1251" || k === "win1251") return "cp1251";
+  if (k === "ascii" || k === "us-ascii") return "ascii";
   return null;
 }
 
@@ -51,7 +52,7 @@ export class EncodingCheck extends BaseCheck {
     super(repoRoot, options);
     const declared = normalizeEncoding(options.encoding);
     if (!declared || !SUPPORTED.has(declared)) {
-      throw new Error(`EncodingCheck: option "encoding" must be "utf-8" or "cp1251", got ${JSON.stringify(options.encoding)}`);
+      throw new Error(`EncodingCheck: option "encoding" must be "utf-8", "cp1251", or "ascii", got ${JSON.stringify(options.encoding)}`);
     }
     this.#encoding = declared;
   }
@@ -69,6 +70,9 @@ export class EncodingCheck extends BaseCheck {
       }
       if (isAsciiOnly(buf)) {
         return { status: "pass" };
+      }
+      if (this.#encoding === "ascii") {
+        return { status: "fail", output: "file contains non-ASCII bytes (>= 0x80)" };
       }
       const valid = isValidUtf8(buf);
       if (this.#encoding === "utf-8") {
@@ -94,6 +98,14 @@ export class EncodingCheck extends BaseCheck {
         return { status: "pass" };
       }
 
+      if (this.#encoding === "ascii") {
+        if (hadBom) {
+          await fs.writeFile(file, stripped);
+          return { status: "fail", output: "stripped BOM, but file still contains non-ASCII bytes that cannot be auto-fixed" };
+        }
+        return { status: "fail", output: "file contains non-ASCII bytes (>= 0x80) that cannot be auto-fixed" };
+      }
+
       const sourceIsUtf8 = isValidUtf8(stripped);
       const sourceEncoding = sourceIsUtf8 ? "utf-8" : "cp1251";
 
@@ -117,8 +129,8 @@ export class EncodingCheck extends BaseCheck {
   static getHelp() {
     return {
       name: "EncodingCheck",
-      description: "Asserts that files use a specific text encoding (utf-8 or cp1251). Bans BOMs. ASCII-only files always pass. Autofix transcodes between the two encodings via iconv-lite.",
-      options: 'encoding — required, "utf-8" or "cp1251"; plus base options (extensions, includePaths, excludePaths, textOnly, priority).',
+      description: "Asserts that files use a specific text encoding (utf-8, cp1251, or ascii). Bans BOMs. ASCII-only files always pass. Autofix transcodes between utf-8 and cp1251 via iconv-lite; for ascii mode, fix only strips BOM.",
+      options: 'encoding — required, "utf-8", "cp1251", or "ascii"; plus base options (extensions, includePaths, excludePaths, textOnly, priority).',
     };
   }
 }

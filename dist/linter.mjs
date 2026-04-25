@@ -5130,7 +5130,7 @@ var CrlfCheck = class extends BaseCheck {
 // checks/encoding-check.js
 var import_iconv_lite = __toESM(require_lib(), 1);
 import fs4 from "fs/promises";
-var SUPPORTED = /* @__PURE__ */ new Set(["utf-8", "cp1251"]);
+var SUPPORTED = /* @__PURE__ */ new Set(["utf-8", "cp1251", "ascii"]);
 var UTF8_BOM = Buffer.from([239, 187, 191]);
 var UTF16_LE_BOM = Buffer.from([255, 254]);
 var UTF16_BE_BOM = Buffer.from([254, 255]);
@@ -5163,6 +5163,7 @@ function normalizeEncoding(name) {
   const k = name.toLowerCase().replace(/_/g, "-");
   if (k === "utf8" || k === "utf-8") return "utf-8";
   if (k === "cp1251" || k === "windows-1251" || k === "win1251") return "cp1251";
+  if (k === "ascii" || k === "us-ascii") return "ascii";
   return null;
 }
 var EncodingCheck = class extends BaseCheck {
@@ -5171,7 +5172,7 @@ var EncodingCheck = class extends BaseCheck {
     super(repoRoot, options);
     const declared = normalizeEncoding(options.encoding);
     if (!declared || !SUPPORTED.has(declared)) {
-      throw new Error(`EncodingCheck: option "encoding" must be "utf-8" or "cp1251", got ${JSON.stringify(options.encoding)}`);
+      throw new Error(`EncodingCheck: option "encoding" must be "utf-8", "cp1251", or "ascii", got ${JSON.stringify(options.encoding)}`);
     }
     this.#encoding = declared;
   }
@@ -5187,6 +5188,9 @@ var EncodingCheck = class extends BaseCheck {
       }
       if (isAsciiOnly(buf)) {
         return { status: "pass" };
+      }
+      if (this.#encoding === "ascii") {
+        return { status: "fail", output: "file contains non-ASCII bytes (>= 0x80)" };
       }
       const valid = isValidUtf8(buf);
       if (this.#encoding === "utf-8") {
@@ -5209,6 +5213,13 @@ var EncodingCheck = class extends BaseCheck {
         }
         return { status: "pass" };
       }
+      if (this.#encoding === "ascii") {
+        if (hadBom) {
+          await fs4.writeFile(file, stripped);
+          return { status: "fail", output: "stripped BOM, but file still contains non-ASCII bytes that cannot be auto-fixed" };
+        }
+        return { status: "fail", output: "file contains non-ASCII bytes (>= 0x80) that cannot be auto-fixed" };
+      }
       const sourceIsUtf8 = isValidUtf8(stripped);
       const sourceEncoding = sourceIsUtf8 ? "utf-8" : "cp1251";
       if (sourceEncoding === this.#encoding) {
@@ -5229,8 +5240,8 @@ var EncodingCheck = class extends BaseCheck {
   static getHelp() {
     return {
       name: "EncodingCheck",
-      description: "Asserts that files use a specific text encoding (utf-8 or cp1251). Bans BOMs. ASCII-only files always pass. Autofix transcodes between the two encodings via iconv-lite.",
-      options: 'encoding \u2014 required, "utf-8" or "cp1251"; plus base options (extensions, includePaths, excludePaths, textOnly, priority).'
+      description: "Asserts that files use a specific text encoding (utf-8, cp1251, or ascii). Bans BOMs. ASCII-only files always pass. Autofix transcodes between utf-8 and cp1251 via iconv-lite; for ascii mode, fix only strips BOM.",
+      options: 'encoding \u2014 required, "utf-8", "cp1251", or "ascii"; plus base options (extensions, includePaths, excludePaths, textOnly, priority).'
     };
   }
 };
@@ -18730,7 +18741,7 @@ var builtinRegistry = {
 var __filename = fileURLToPath(import.meta.url);
 var __dirname = path16.dirname(__filename);
 var LINTER_VERSION = true ? "0.0.1" : "dev";
-var LINTER_COMMIT = true ? "35f4568" : "unknown";
+var LINTER_COMMIT = true ? "27ea728" : "unknown";
 var UPGRADE_URL = "https://raw.githubusercontent.com/skyrim-multiplayer/linter/main/dist/linter.mjs";
 var YARN_INSTALL_SPEC = "https://github.com/skyrim-multiplayer/linter#main";
 var getRepoRoot = () => {
