@@ -7,6 +7,7 @@
 
 // --- checks ---
 import { CrlfCheck } from "./checks/crlf-check.js";
+import { EncodingCheck } from "./checks/encoding-check.js";
 import { LinelintCheck } from "./checks/linelint-check.js";
 import { ClangFormatCheck } from "./checks/clang-format-check.js";
 import { PairedFilesCheck } from "./checks/paired-files-check.js";
@@ -29,6 +30,7 @@ import { JsonArrayExpander } from "./expanders/json-array-expander.js";
 
 export const builtinChecks = {
   CrlfCheck,
+  EncodingCheck,
   LinelintCheck,
   ClangFormatCheck,
   PairedFilesCheck,
